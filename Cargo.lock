@@ -297,6 +297,8 @@ version = "0.1.0"
 dependencies = [
  "analysis",
  "anyhow",
+ "ark-bls12-381",
+ "ark-ff",
  "clap",
  "domain",
  "tiling",

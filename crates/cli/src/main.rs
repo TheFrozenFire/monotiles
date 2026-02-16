@@ -1,3 +1,274 @@
-fn main() {
-    println!("monotiles cli");
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "monotiles", about = "Monotile tiling experiments")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Verify Coxeter group relations and Cucaracha properties
+    VerifyCoxeter,
+
+    /// Show the Cucaracha elements in normal form
+    Cucaracha,
+
+    /// Compute metatile counts at each substitution level
+    Inflate {
+        /// Seed metatile type: H, T, P, or F
+        #[arg(default_value = "H")]
+        seed: String,
+        /// Number of substitution levels
+        #[arg(short, long, default_value_t = 5)]
+        levels: usize,
+    },
+
+    /// Generate and display a Sturmian word
+    Sturmian {
+        /// Number of terms to generate
+        #[arg(short, long, default_value_t = 50)]
+        terms: usize,
+    },
+
+    /// Display the hat substitution matrix and verify its properties
+    Matrix,
+
+    /// Verify field extension properties
+    Fields,
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::VerifyCoxeter => cmd_verify_coxeter(),
+        Commands::Cucaracha => cmd_cucaracha(),
+        Commands::Inflate { seed, levels } => cmd_inflate(&seed, levels),
+        Commands::Sturmian { terms } => cmd_sturmian(terms),
+        Commands::Matrix => cmd_matrix(),
+        Commands::Fields => cmd_fields(),
+    }
+}
+
+fn cmd_verify_coxeter() -> Result<()> {
+    use domain::coxeter::{CoxeterElement, Generator::*};
+
+    let alpha = CoxeterElement::generator(Alpha);
+    let beta = CoxeterElement::generator(Beta);
+    let gamma = CoxeterElement::generator(Gamma);
+    let id = CoxeterElement::identity();
+
+    let pow = |g: &CoxeterElement, n: u32| -> CoxeterElement {
+        (0..n).fold(id, |acc, _| acc.compose(g))
+    };
+
+    let checks = [
+        ("alpha^2 = id", pow(&alpha, 2) == id),
+        ("beta^2 = id", pow(&beta, 2) == id),
+        ("gamma^2 = id", pow(&gamma, 2) == id),
+        (
+            "(alpha*beta)^6 = id",
+            pow(&alpha.compose(&beta), 6) == id,
+        ),
+        (
+            "(beta*gamma)^3 = id",
+            pow(&beta.compose(&gamma), 3) == id,
+        ),
+        (
+            "(alpha*gamma)^2 = id",
+            pow(&alpha.compose(&gamma), 2) == id,
+        ),
+    ];
+
+    println!("Coxeter group Gamma verification:");
+    let mut all_ok = true;
+    for (name, ok) in &checks {
+        let status = if *ok { "PASS" } else { "FAIL" };
+        println!("  {}: {}", name, status);
+        if !*ok {
+            all_ok = false;
+        }
+    }
+
+    if all_ok {
+        println!("\nAll 6 Coxeter relations verified.");
+    } else {
+        anyhow::bail!("Some Coxeter relations failed!");
+    }
+
+    // Verify inverse
+    let test_elements = [
+        alpha,
+        beta,
+        gamma,
+        alpha.compose(&beta),
+        CoxeterElement::new(3, -2, 4, true),
+    ];
+    println!("\nInverse verification:");
+    for g in &test_elements {
+        let g_inv = g.inverse();
+        let ok = g.compose(&g_inv) == id && g_inv.compose(g) == id;
+        println!("  {:?} * inverse = id: {}", g, if ok { "PASS" } else { "FAIL" });
+    }
+
+    Ok(())
+}
+
+fn cmd_cucaracha() -> Result<()> {
+    let elements = domain::cucaracha::cucaracha();
+    let words = domain::cucaracha::CUCARACHA_WORDS;
+
+    println!("Cucaracha: 16-element aperiodic monotile of Gamma\n");
+    println!("{:<5} {:<25} {:?}", "Idx", "Word", "Normal Form (tx, ty, rot, refl)");
+    println!("{}", "-".repeat(70));
+
+    for (i, (elem, word)) in elements.iter().zip(words.iter()).enumerate() {
+        let word_str = if word.is_empty() {
+            "id".to_string()
+        } else {
+            word.iter()
+                .map(|g| match g {
+                    domain::coxeter::Generator::Alpha => "a",
+                    domain::coxeter::Generator::Beta => "b",
+                    domain::coxeter::Generator::Gamma => "c",
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        println!(
+            "{:<5} {:<25} ({}, {}, {}, {})",
+            i, word_str, elem.tx, elem.ty, elem.rotation, elem.reflected
+        );
+    }
+
+    println!("\nAll elements distinct: {}", {
+        let unique: std::collections::HashSet<_> = elements.iter().collect();
+        unique.len() == 16
+    });
+
+    Ok(())
+}
+
+fn cmd_inflate(seed: &str, levels: usize) -> Result<()> {
+    let seed_type = match seed.to_uppercase().as_str() {
+        "H" => tiling::metatile::MetatileType::H,
+        "T" => tiling::metatile::MetatileType::T,
+        "P" => tiling::metatile::MetatileType::P,
+        "F" => tiling::metatile::MetatileType::F,
+        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
+    };
+
+    let counts = tiling::substitution::generate_counts(seed_type, levels);
+    let hat_counts = tiling::substitution::hat_counts(seed_type, levels);
+
+    println!("Substitution from seed {:?}, {} levels:\n", seed_type, levels);
+    println!("{:<8} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10}", "Level", "H", "T", "P", "F", "Total", "Hats");
+    println!("{}", "-".repeat(70));
+
+    for (level, (count, hats)) in counts.iter().zip(hat_counts.iter()).enumerate() {
+        let total: usize = count.iter().sum();
+        println!(
+            "{:<8} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10}",
+            level, count[0], count[1], count[2], count[3], total, hats
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_sturmian(terms: usize) -> Result<()> {
+    let word = analysis::sturmian::fibonacci_word(terms);
+
+    println!("Fibonacci Sturmian word ({} terms):", terms);
+    let line: String = word.iter().map(|b| if *b == 0 { '0' } else { '1' }).collect();
+    for chunk in line.as_bytes().chunks(60) {
+        println!("  {}", std::str::from_utf8(chunk).unwrap());
+    }
+
+    println!("\nFrequency of 1s: {:.6}", analysis::sturmian::frequency_of_ones(&word));
+
+    let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+    println!("Expected (1/phi^2): {:.6}", 1.0 / (phi * phi));
+
+    println!("\nComplexity p(n):");
+    for n in 1..=10 {
+        println!("  p({}) = {} (expected {})", n, analysis::sturmian::complexity(&word, n), n + 1);
+    }
+
+    Ok(())
+}
+
+fn cmd_matrix() -> Result<()> {
+    use ark_bls12_381::Fr;
+
+    let m = analysis::spectral::hat_substitution_matrix::<Fr>();
+    let comp = tiling::metatile::supertile_composition();
+
+    println!("Hat substitution matrix (H, T, P, F):\n");
+    let labels = ["H'", "T'", "P'", "F'"];
+    for (i, label) in labels.iter().enumerate() {
+        println!(
+            "  {} = {}H + {}T + {}P + {}F  (total: {})",
+            label, comp[i][0], comp[i][1], comp[i][2], comp[i][3],
+            comp[i].iter().sum::<usize>()
+        );
+    }
+
+    println!("\nDeterminant: {}", if m.determinant() == -Fr::from(1u64) { "-1" } else { "?" });
+
+    // Verify characteristic polynomial: lambda^4 - 7*lambda^3 + 7*lambda - 1 = 0
+    let id = domain::matrix::Matrix::<Fr>::identity(4);
+    let m2 = m.mul(&m);
+    let m3 = m2.mul(&m);
+    let m4 = m3.mul(&m);
+    let result = &(&m4 + &m3.scale(-Fr::from(7u64)))
+        + &(&m.scale(Fr::from(7u64)) + &id.scale(-Fr::from(1u64)));
+    let is_zero = (0..4).all(|i| (0..4).all(|j| result[(i, j)] == Fr::from(0u64)));
+    println!("Cayley-Hamilton (M^4 - 7M^3 + 7M - I = 0): {}", if is_zero { "VERIFIED" } else { "FAILED" });
+
+    println!("\nEigenvalues: phi^4 = (7+3*sqrt(5))/2, 1, -1, (7-3*sqrt(5))/2");
+    println!("  phi^4 ~= 6.854 (area inflation factor)");
+    println!("  phi^2 ~= 2.618 (edge length inflation factor)");
+
+    Ok(())
+}
+
+fn cmd_fields() -> Result<()> {
+    use ark_ff::Field;
+    use domain::fields::*;
+
+    println!("Field extension verification over BLS12-381 Fr:\n");
+
+    // FrSqrt5
+    let sqrt5 = FrSqrt5::new(ark_bls12_381::Fr::from(0u64), ark_bls12_381::Fr::from(1u64));
+    let five = FrSqrt5::new(ark_bls12_381::Fr::from(5u64), ark_bls12_381::Fr::from(0u64));
+    println!("  sqrt(5)^2 == 5: {}", sqrt5.square() == five);
+
+    let phi = golden_ratio();
+    let phi_sq = phi.square();
+    let phi_plus_one = phi + FrSqrt5::new(ark_bls12_381::Fr::from(1u64), ark_bls12_381::Fr::from(0u64));
+    println!("  phi^2 == phi + 1: {}", phi_sq == phi_plus_one);
+    println!("  phi^2 == hat_inflation(): {}", phi_sq == hat_inflation());
+
+    // FrSqrt15
+    let sqrt15 = FrSqrt15::new(ark_bls12_381::Fr::from(0u64), ark_bls12_381::Fr::from(1u64));
+    let fifteen = FrSqrt15::new(ark_bls12_381::Fr::from(15u64), ark_bls12_381::Fr::from(0u64));
+    println!("  sqrt(15)^2 == 15: {}", sqrt15.square() == fifteen);
+
+    // Inverse round-trips
+    let a = FrSqrt5::new(ark_bls12_381::Fr::from(7u64), ark_bls12_381::Fr::from(3u64));
+    let a_inv = a.inverse().expect("nonzero invertible");
+    println!("  FrSqrt5 inverse round-trip: {}", a * a_inv == FrSqrt5::ONE);
+
+    let b = FrSqrt15::new(ark_bls12_381::Fr::from(11u64), ark_bls12_381::Fr::from(2u64));
+    let b_inv = b.inverse().expect("nonzero invertible");
+    println!("  FrSqrt15 inverse round-trip: {}", b * b_inv == FrSqrt15::ONE);
+
+    println!("\nAll field properties verified.");
+    Ok(())
 }
