@@ -96,6 +96,93 @@ pub fn complexity(word: &[u8], n: usize) -> usize {
     factors.len()
 }
 
+/// Generate the hat tiling Sturmian word with slope (5 - sqrt(5))/10 = 1/(1 + tau^2).
+///
+/// This slope corresponds to the H-metatile frequency in the hat tiling.
+/// The continued fraction is [0; 3, 1, 1, 1, ...] = [0; 3, phi^{-1}].
+pub fn hat_sturmian_word(n: usize) -> Vec<u8> {
+    let alpha = (5.0 - 5.0_f64.sqrt()) / 10.0; // = 1/(1 + phi^2)
+    sturmian_word(alpha, 0.0, n)
+}
+
+/// Generate central words for the hat tiling slope [0; 3, 1, 1, 1, ...].
+///
+/// The first partial quotient is 3, then all subsequent ones are 1 (golden continued fraction).
+pub fn hat_central_words(levels: usize) -> Vec<Vec<u8>> {
+    let mut pq = vec![3];
+    pq.extend(std::iter::repeat_n(1, levels.saturating_sub(1)));
+    central_words(&pq)
+}
+
+/// A Golden Sturmian Patch: a geometric realization of a Sturmian subword
+/// as a linear strip of metatiles.
+///
+/// Each position in the Sturmian word maps to a metatile type:
+/// - 0 → a "short" tile (P-type parallelogram)
+/// - 1 → a "long" tile (H-type hexagon)
+///
+/// This provides the 1D combinatorial skeleton of the hat tiling.
+#[derive(Clone, Debug)]
+pub struct GoldenSturmianPatch {
+    /// The Sturmian word defining the strip.
+    pub word: Vec<u8>,
+    /// The tile types assigned to each position.
+    pub tiles: Vec<SturmianTile>,
+}
+
+/// A tile in a Sturmian strip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SturmianTile {
+    /// 0 = short (P), 1 = long (H)
+    pub tile_type: u8,
+    /// Cumulative position along the strip.
+    pub position: f64,
+    /// Length of this tile.
+    pub length: f64,
+}
+
+/// Generate a Golden Sturmian Patch from a Sturmian word.
+///
+/// Maps the binary word to a strip where:
+/// - 0 → tile of length 1 (short, corresponding to P-type)
+/// - 1 → tile of length phi (long, corresponding to H-type)
+pub fn golden_sturmian_patch(word: &[u8]) -> GoldenSturmianPatch {
+    let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+    let mut tiles = Vec::with_capacity(word.len());
+    let mut pos = 0.0;
+
+    for &symbol in word {
+        let length = if symbol == 0 { 1.0 } else { phi };
+        tiles.push(SturmianTile {
+            tile_type: symbol,
+            position: pos,
+            length,
+        });
+        pos += length;
+    }
+
+    GoldenSturmianPatch {
+        word: word.to_vec(),
+        tiles,
+    }
+}
+
+impl GoldenSturmianPatch {
+    /// Total length of the patch strip.
+    pub fn total_length(&self) -> f64 {
+        self.tiles.iter().map(|t| t.length).sum()
+    }
+
+    /// Ratio of long tiles to total tiles, converging to 1/phi^2 for Sturmian words.
+    pub fn long_tile_ratio(&self) -> f64 {
+        if self.tiles.is_empty() {
+            return 0.0;
+        }
+        let long_count = self.tiles.iter().filter(|t| t.tile_type == 1).count();
+        long_count as f64 / self.tiles.len() as f64
+    }
+}
+
 /// Compute the frequency of symbol 1 in a word.
 pub fn frequency_of_ones(word: &[u8]) -> f64 {
     if word.is_empty() {
@@ -197,5 +284,65 @@ mod tests {
         let word = vec![0, 1, 0];
         assert_eq!(complexity(&word, 0), 1);
         assert_eq!(complexity(&word, 4), 0); // longer than word
+    }
+
+    #[test]
+    fn hat_sturmian_word_is_sturmian() {
+        let w = hat_sturmian_word(100);
+        // Sturmian: complexity p(n) = n + 1
+        for n in 1..=10 {
+            assert_eq!(complexity(&w, n), n + 1, "hat Sturmian complexity({}) failed", n);
+        }
+    }
+
+    #[test]
+    fn hat_sturmian_frequency_correct() {
+        let w = hat_sturmian_word(10000);
+        let freq = frequency_of_ones(&w);
+        let expected = (5.0 - 5.0_f64.sqrt()) / 10.0; // ~0.2764
+        assert!((freq - expected).abs() < 0.01, "freq={}, expected={}", freq, expected);
+    }
+
+    #[test]
+    fn hat_central_words_first_is_triple() {
+        let words = hat_central_words(3);
+        // w_1 = w_0^3 w_{-1} = "000" + "1" = "0001" (d_1 = 3)
+        assert_eq!(words[2], vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn golden_sturmian_patch_lengths() {
+        let word = vec![0, 1, 0, 0, 1];
+        let patch = golden_sturmian_patch(&word);
+        assert_eq!(patch.tiles.len(), 5);
+
+        // Total length: 1 + phi + 1 + 1 + phi = 3 + 2*phi
+        let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+        let expected_len = 3.0 + 2.0 * phi;
+        assert!((patch.total_length() - expected_len).abs() < 1e-10);
+    }
+
+    #[test]
+    fn golden_sturmian_patch_positions_monotonic() {
+        let w = fibonacci_word(20);
+        let patch = golden_sturmian_patch(&w);
+        for i in 1..patch.tiles.len() {
+            assert!(
+                patch.tiles[i].position > patch.tiles[i - 1].position,
+                "positions should be strictly increasing"
+            );
+        }
+    }
+
+    #[test]
+    fn golden_sturmian_patch_ratio_converges() {
+        let w = fibonacci_word(1000);
+        let patch = golden_sturmian_patch(&w);
+        let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+        let expected = 1.0 / (phi * phi);
+        assert!(
+            (patch.long_tile_ratio() - expected).abs() < 0.01,
+            "long tile ratio should approach 1/phi^2"
+        );
     }
 }

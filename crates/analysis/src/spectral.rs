@@ -122,6 +122,64 @@ pub fn perron_eigenvalue<F: Field>(matrix: &Matrix<F>, iterations: usize) -> F {
     eigenvalue
 }
 
+/// Compute the exact left Perron-Frobenius eigenvector over a field extension.
+///
+/// For the hat substitution matrix, the PF eigenvalue is phi^4 = (7 + 3*sqrt(5))/2.
+/// The left eigenvector v satisfies v^T M = phi^4 v^T and gives exact tile frequencies
+/// when normalized to sum to 1.
+///
+/// Returns [v_H, v_T, v_P, v_F] in the field F, which must contain sqrt(5).
+///
+/// The unnormalized eigenvector (solving (M^T - lambda I)v = 0) is:
+///   [1, 5 - 3*phi, 6*phi - 9, 6 - 3*phi]
+/// which sums to 3, yielding:
+///   v = [1/3, (5 - 3*phi)/3, (6*phi - 9)/3, (6 - 3*phi)/3]
+///     = [1/3, 1/(3*phi^4), 1/phi^3, 1/phi^2]
+pub fn exact_hat_eigenvector<F: Field>(phi: F) -> Vec<F> {
+    let three = F::from(3u64);
+    let five = F::from(5u64);
+    let six = F::from(6u64);
+    let nine = F::from(9u64);
+    let three_inv = three.inverse().expect("3 is invertible");
+
+    // Unnormalized: [1, 5-3*phi, 6*phi-9, 6-3*phi], sum = 3
+    let v_h = three_inv;
+    let v_t = (five - three * phi) * three_inv;
+    let v_p = (six * phi - nine) * three_inv;
+    let v_f = (six - three * phi) * three_inv;
+
+    vec![v_h, v_t, v_p, v_f]
+}
+
+/// Verify the GAB (Gähler-Akiyama-Baake) frequency equation for hat tilings.
+///
+/// The tile frequency q for the H-type metatile satisfies:
+///   q^2 - q + 1/5 = 0
+///
+/// with solutions q = (5 ± sqrt(5)) / 10.
+///
+/// This connects the substitution matrix eigenvalues to a quadratic over Q,
+/// verifying that tile frequencies lie in Q(sqrt(5)).
+///
+/// Returns true if the equation holds for the given frequency value.
+pub fn verify_gab_equation<F: Field>(q: F) -> bool {
+    let five = F::from(5u64);
+    let five_inv = five.inverse().expect("5 is invertible");
+    // q^2 - q + 1/5 = 0
+    q * q - q + five_inv == F::ZERO
+}
+
+/// Compute the two GAB frequency roots (5 + sqrt(5))/10 and (5 - sqrt(5))/10.
+///
+/// These are the tile frequency values for the H metatile in Q(sqrt(5)).
+pub fn gab_frequency_roots<F: Field>(sqrt5: F) -> (F, F) {
+    let five = F::from(5u64);
+    let ten_inv = F::from(10u64).inverse().expect("10 is invertible");
+    let root_plus = (five + sqrt5) * ten_inv;
+    let root_minus = (five - sqrt5) * ten_inv;
+    (root_plus, root_minus)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +258,78 @@ mod tests {
         // Frequencies should sum to 1
         let sum: F = freqs.iter().copied().sum();
         assert_eq!(sum, F::ONE);
+    }
+
+    #[test]
+    fn exact_hat_eigenvector_is_left_eigenvector() {
+        use domain::fields::{FrSqrt5, golden_ratio};
+
+        let phi = golden_ratio();
+        let v = exact_hat_eigenvector(phi);
+
+        // Build the hat matrix over FrSqrt5
+        let m = hat_substitution_matrix::<FrSqrt5>();
+        let lambda = phi * phi * phi * phi; // phi^4
+
+        // Verify v^T M = lambda v^T
+        // i.e., sum_i v[i] * M[i][j] = lambda * v[j] for all j
+        for j in 0..4 {
+            let lhs: FrSqrt5 = (0..4).map(|i| v[i] * m[(i, j)]).sum();
+            let rhs = lambda * v[j];
+            assert_eq!(lhs, rhs, "eigenvector check failed at column {}", j);
+        }
+    }
+
+    #[test]
+    fn exact_hat_eigenvector_sums_to_one() {
+        use domain::fields::golden_ratio;
+        type Ext = domain::fields::FrSqrt5;
+
+        let phi = golden_ratio();
+        let v = exact_hat_eigenvector(phi);
+        let sum: Ext = v.iter().copied().sum();
+        assert_eq!(sum, Ext::ONE);
+    }
+
+    #[test]
+    fn gab_equation_holds_for_roots() {
+        use domain::fields::FrSqrt5;
+
+        let sqrt5 = FrSqrt5::new(
+            ark_bls12_381::Fr::from(0u64),
+            ark_bls12_381::Fr::from(1u64),
+        );
+        let (q_plus, q_minus) = gab_frequency_roots(sqrt5);
+
+        assert!(verify_gab_equation(q_plus), "GAB equation should hold for (5+sqrt(5))/10");
+        assert!(verify_gab_equation(q_minus), "GAB equation should hold for (5-sqrt(5))/10");
+    }
+
+    #[test]
+    fn gab_roots_sum_to_one() {
+        use domain::fields::FrSqrt5;
+
+        let sqrt5 = FrSqrt5::new(
+            ark_bls12_381::Fr::from(0u64),
+            ark_bls12_381::Fr::from(1u64),
+        );
+        let (q_plus, q_minus) = gab_frequency_roots(sqrt5);
+        assert_eq!(q_plus + q_minus, FrSqrt5::ONE, "GAB roots should sum to 1");
+    }
+
+    #[test]
+    fn gab_roots_product_is_one_fifth() {
+        use domain::fields::FrSqrt5;
+
+        let sqrt5 = FrSqrt5::new(
+            ark_bls12_381::Fr::from(0u64),
+            ark_bls12_381::Fr::from(1u64),
+        );
+        let (q_plus, q_minus) = gab_frequency_roots(sqrt5);
+        let five_inv = FrSqrt5::new(ark_bls12_381::Fr::from(5u64), ark_bls12_381::Fr::from(0u64))
+            .inverse()
+            .unwrap();
+        assert_eq!(q_plus * q_minus, five_inv, "GAB roots product should be 1/5");
     }
 
     #[test]
