@@ -11,3 +11,4 @@ ark-std.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+ark-bls12-381.workspace = true
