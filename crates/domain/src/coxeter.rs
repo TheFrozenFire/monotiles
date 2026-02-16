@@ -117,6 +117,57 @@ impl CoxeterElement {
         (tx, ty, rotation, reflected)
     }
 
+    /// Decompose into coset components: translation in Z² and point group element in D₆.
+    ///
+    /// Returns `(translation, point_group)` where:
+    /// - `translation` is the Z² lattice component (tx, ty, 0, false)
+    /// - `point_group` is the D₆ component (0, 0, rotation, reflected)
+    ///
+    /// Satisfies: `self == translation.compose(&point_group)`
+    pub fn coset_decompose(&self) -> (Self, Self) {
+        let translation = Self::new(self.tx, self.ty, 0, false);
+        let point_group = Self::new(0, 0, self.rotation, self.reflected);
+        (translation, point_group)
+    }
+
+    /// The Z² translation component of this element.
+    pub fn translation(&self) -> (i64, i64) {
+        (self.tx, self.ty)
+    }
+
+    /// The D₆ point group component: (rotation, reflected).
+    pub fn point_group(&self) -> (u8, bool) {
+        (self.rotation, self.reflected)
+    }
+
+    /// Check if this element is a pure translation (trivial point group part).
+    pub fn is_translation(&self) -> bool {
+        self.rotation == 0 && !self.reflected
+    }
+
+    /// Check if this element is in the point group D₆ (trivial translation part).
+    pub fn is_point_group(&self) -> bool {
+        self.tx == 0 && self.ty == 0
+    }
+
+    /// Enumerate all 12 elements of the point group D₆ = Z/6Z ⋊ Z/2Z.
+    pub fn point_group_elements() -> [Self; 12] {
+        [
+            Self::new(0, 0, 0, false),
+            Self::new(0, 0, 1, false),
+            Self::new(0, 0, 2, false),
+            Self::new(0, 0, 3, false),
+            Self::new(0, 0, 4, false),
+            Self::new(0, 0, 5, false),
+            Self::new(0, 0, 0, true),
+            Self::new(0, 0, 1, true),
+            Self::new(0, 0, 2, true),
+            Self::new(0, 0, 3, true),
+            Self::new(0, 0, 4, true),
+            Self::new(0, 0, 5, true),
+        ]
+    }
+
     /// Apply the rotation-reflection action phi(r, s) to a lattice vector.
     ///
     /// phi(r, s)(v) = R^r(sigma^s(v))
@@ -277,6 +328,54 @@ mod tests {
         let ab_c = a.compose(&b).compose(&c);
         let a_bc = a.compose(&b.compose(&c));
         assert_eq!(ab_c, a_bc);
+    }
+
+    // -- Coset decomposition --
+
+    #[test]
+    fn coset_decompose_roundtrip() {
+        let elements = [
+            CoxeterElement::new(3, -2, 4, true),
+            CoxeterElement::new(0, 0, 0, false),
+            CoxeterElement::new(-1, 5, 2, false),
+            CoxeterElement::new(0, 0, 3, true),
+            alpha().compose(&beta()).compose(&gamma()),
+        ];
+        for g in &elements {
+            let (t, p) = g.coset_decompose();
+            assert!(t.is_translation(), "translation part should be pure translation");
+            assert!(p.is_point_group(), "point group part should be pure point group");
+            assert_eq!(t.compose(&p), *g, "t * p should equal g for {:?}", g);
+        }
+    }
+
+    #[test]
+    fn point_group_has_twelve_elements() {
+        let elements = CoxeterElement::point_group_elements();
+        assert_eq!(elements.len(), 12);
+        let unique: std::collections::HashSet<_> = elements.iter().collect();
+        assert_eq!(unique.len(), 12, "all D6 elements should be distinct");
+    }
+
+    #[test]
+    fn point_group_closed_under_composition() {
+        let elements = CoxeterElement::point_group_elements();
+        for a in &elements {
+            for b in &elements {
+                let ab = a.compose(b);
+                assert!(ab.is_point_group(), "{:?} * {:?} = {:?} should be in D6", a, b, ab);
+            }
+        }
+    }
+
+    #[test]
+    fn point_group_every_element_has_inverse_in_group() {
+        let elements = CoxeterElement::point_group_elements();
+        let set: std::collections::HashSet<_> = elements.iter().collect();
+        for g in &elements {
+            let g_inv = g.inverse();
+            assert!(set.contains(&g_inv), "{:?} inverse {:?} not in D6", g, g_inv);
+        }
     }
 
     // -- Rotation helper --
