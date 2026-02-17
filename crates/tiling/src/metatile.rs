@@ -183,11 +183,18 @@ pub fn inflation_rules() -> Vec<InflationRule> {
 /// Child indices belonging to each supertile type after inflation.
 ///
 /// After building the 29-child patch via `inflation_rules()`, these index sets
-/// identify which children form each level-1 supertile.
+/// identify which children form each level-1 supertile. 22 of the 29 children
+/// are assigned; the remaining 7 are boundary children shared with neighbors.
 pub const SUPERTILE_H_CHILDREN: &[usize] = &[0, 9, 16, 27, 26, 6, 1, 8, 10, 15];
 pub const SUPERTILE_T_CHILDREN: &[usize] = &[11];
 pub const SUPERTILE_P_CHILDREN: &[usize] = &[7, 2, 3, 4, 28];
 pub const SUPERTILE_F_CHILDREN: &[usize] = &[21, 20, 22, 23, 24, 25];
+
+/// The 7 boundary children not assigned to any supertile.
+///
+/// These children are shared with neighboring supertiles during inflation.
+/// Together with the 22 assigned children, they account for all 29 inflation children.
+pub const BOUNDARY_CHILDREN: &[usize] = &[5, 12, 13, 14, 17, 18, 19];
 
 /// Count the metatile types within each supertile.
 ///
@@ -272,6 +279,21 @@ mod tests {
         assert_eq!(SUPERTILE_T_CHILDREN.len(), 1);
         assert_eq!(SUPERTILE_P_CHILDREN.len(), 5);
         assert_eq!(SUPERTILE_F_CHILDREN.len(), 6);
+    }
+
+    #[test]
+    fn boundary_and_assigned_children_cover_all_29() {
+        // The 22 assigned + 7 boundary children must account for all 29 inflation children
+        let mut all: Vec<usize> = Vec::new();
+        all.extend_from_slice(SUPERTILE_H_CHILDREN);
+        all.extend_from_slice(SUPERTILE_T_CHILDREN);
+        all.extend_from_slice(SUPERTILE_P_CHILDREN);
+        all.extend_from_slice(SUPERTILE_F_CHILDREN);
+        all.extend_from_slice(BOUNDARY_CHILDREN);
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 29, "should have exactly 29 unique children");
+        assert_eq!(all, (0..29).collect::<Vec<_>>(), "should cover indices 0..28");
     }
 
     #[test]

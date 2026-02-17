@@ -45,11 +45,16 @@ pub fn spectre_substitution_matrix<F: Field>() -> Matrix<F> {
     )
 }
 
-/// Compute tile frequencies by power iteration on the substitution matrix.
+/// Compute tile frequencies via left eigenvector power iteration.
 ///
-/// Starting from a uniform initial vector, repeatedly multiply by the matrix
-/// and normalize. Converges to the Perron-Frobenius eigenvector for primitive
-/// matrices, giving relative tile frequencies in the infinite tiling.
+/// Tile frequencies are determined by the **left** Perron-Frobenius eigenvector
+/// (v^T M = λ v^T), which gives the stationary distribution of the substitution.
+/// This is NOT the same as the right eigenvector (Mv = λv) for non-symmetric
+/// matrices like the hat substitution matrix.
+///
+/// Equivalently, this computes the right eigenvector of M^T by iterating
+/// v_{k+1} = M^T v_k and normalizing. Starting from a uniform initial vector,
+/// this converges to the left PF eigenvector for primitive matrices.
 ///
 /// Returns the normalized frequency vector after `iterations` steps.
 pub fn tile_frequencies<F: Field>(matrix: &Matrix<F>, iterations: usize) -> Vec<F> {
@@ -60,11 +65,12 @@ pub fn tile_frequencies<F: Field>(matrix: &Matrix<F>, iterations: usize) -> Vec<
     let mut v = vec![F::ONE; n];
 
     for _ in 0..iterations {
-        // Multiply: v = M * v
+        // Multiply: v = M^T * v (left eigenvector iteration)
+        // v_new[j] = sum_i M[i][j] * v[i] = sum_i v[i] * M[i][j]
         let mut new_v = vec![F::ZERO; n];
-        for i in 0..n {
-            for j in 0..n {
-                new_v[i] += matrix[(i, j)] * v[j];
+        for j in 0..n {
+            for i in 0..n {
+                new_v[j] += matrix[(i, j)] * v[i];
             }
         }
 
@@ -167,6 +173,25 @@ pub fn verify_gab_equation<F: Field>(q: F) -> bool {
     let five_inv = five.inverse().expect("5 is invertible");
     // q^2 - q + 1/5 = 0
     q * q - q + five_inv == F::ZERO
+}
+
+/// Compute the integer inverse of the hat substitution matrix.
+///
+/// Since det(M) = -1, the matrix M is in GL(4,Z) — it has an integer inverse.
+/// From the Cayley-Hamilton theorem, M^4 - 7M^3 + 7M - I = 0, so:
+///   M^{-1} = M^3 - 7M^2 + 7I
+///
+/// This enables "de-substitution": running the hierarchy backwards to recover
+/// the parent supertile from child metatiles.
+pub fn hat_matrix_inverse<F: Field>() -> Matrix<F> {
+    let m = hat_substitution_matrix::<F>();
+    let m2 = m.mul(&m);
+    let m3 = m2.mul(&m);
+    let id = Matrix::<F>::identity(4);
+
+    // M^{-1} = M^3 - 7*M^2 + 7*I
+    let seven = F::from(7u64);
+    &(&m3 + &m2.scale(-seven)) + &id.scale(seven)
 }
 
 /// Compute the two GAB frequency roots (5 + sqrt(5))/10 and (5 - sqrt(5))/10.
@@ -334,11 +359,14 @@ mod tests {
 
     #[test]
     fn hat_matrix_characteristic_polynomial_factors() {
-        // char poly = (lambda - 1)(lambda + 1)(lambda^2 - 7*lambda + 1)
-        // The quadratic factor has roots phi^4 and 1/phi^4.
-        // Verify: M^2 - 7*M + I = 0 when restricted to the 2D eigenspace,
-        // which means (M^2 - 7M + I)(M^2 - I) = 0 for the full matrix.
-        // Equivalently: M^4 - 7*M^3 + 7*M - I = 0.
+        // char poly = lambda^4 - 7*lambda^3 + 7*lambda - 1
+        //           = (lambda - 1)(lambda + 1)(lambda^2 - 7*lambda + 1)
+        //
+        // The coefficients (1, -7, 0, 7, -1) are anti-palindromic: this is a
+        // direct consequence of det(M) = -1. If lambda is an eigenvalue, then
+        // -1/lambda is also an eigenvalue (since the product of all eigenvalues
+        // equals det(M) = -1). This duality pairs phi^4 with -phi^{-4} and
+        // 1 with -1, explaining the symmetry.
         let m = hat_substitution_matrix::<F>();
         let m2 = m.mul(&m);
         let m3 = m2.mul(&m);
@@ -350,8 +378,36 @@ mod tests {
         for i in 0..4 {
             for j in 0..4 {
                 assert_eq!(result[(i, j)], F::ZERO,
-                    "char poly not satisfied at ({}, {})", i, j);
+                    "Cayley-Hamilton not satisfied at ({}, {})", i, j);
             }
         }
+    }
+
+    #[test]
+    fn hat_matrix_inverse_is_integer() {
+        // Since det(M) = -1, M^{-1} exists and has integer entries.
+        // Verify M * M^{-1} = I.
+        let m = hat_substitution_matrix::<F>();
+        let m_inv = hat_matrix_inverse::<F>();
+        let product = m.mul(&m_inv);
+        let id = Matrix::<F>::identity(4);
+        assert_eq!(product, id, "M * M^{{-1}} should be identity");
+    }
+
+    #[test]
+    fn hat_matrix_inverse_is_inverse_both_sides() {
+        // Verify M^{-1} * M = I as well.
+        let m = hat_substitution_matrix::<F>();
+        let m_inv = hat_matrix_inverse::<F>();
+        let product = m_inv.mul(&m);
+        let id = Matrix::<F>::identity(4);
+        assert_eq!(product, id, "M^{{-1}} * M should be identity");
+    }
+
+    #[test]
+    fn hat_matrix_inverse_determinant() {
+        // det(M^{-1}) = 1/det(M) = 1/(-1) = -1
+        let m_inv = hat_matrix_inverse::<F>();
+        assert_eq!(m_inv.determinant(), -F::ONE);
     }
 }

@@ -183,6 +183,32 @@ impl GoldenSturmianPatch {
     }
 }
 
+/// Generate the exact Fibonacci word via morphism iteration.
+///
+/// Uses the Fibonacci morphism sigma: 0 -> 01, 1 -> 0.
+/// After n iterations starting from "0", the word has length F(n+1)
+/// where F is the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, 21, 34, ...).
+///
+/// The counts are always consecutive Fibonacci numbers:
+/// - count of 0s = F(n), count of 1s = F(n-1)
+/// - This is exact, not approximate — the counts ARE Fibonacci numbers,
+///   not just approximately golden-ratio distributed.
+pub fn fibonacci_word_exact(iterations: usize) -> Vec<u8> {
+    let mut word = vec![0u8];
+    for _ in 0..iterations {
+        let mut next = Vec::with_capacity(word.len() * 2);
+        for &symbol in &word {
+            match symbol {
+                0 => { next.push(0); next.push(1); }
+                1 => { next.push(0); }
+                _ => unreachable!(),
+            }
+        }
+        word = next;
+    }
+    word
+}
+
 /// Compute the frequency of symbol 1 in a word.
 pub fn frequency_of_ones(word: &[u8]) -> f64 {
     if word.is_empty() {
@@ -308,6 +334,46 @@ mod tests {
         let words = hat_central_words(3);
         // w_1 = w_0^3 w_{-1} = "000" + "1" = "0001" (d_1 = 3)
         assert_eq!(words[2], vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn fibonacci_word_exact_lengths_are_fibonacci() {
+        // fibonacci_word_exact(n) has length F(n+1)
+        // F sequence: 1, 1, 2, 3, 5, 8, 13, 21, 34, 55
+        let expected_lens = [1, 2, 3, 5, 8, 13, 21, 34, 55];
+        for (n, &expected) in expected_lens.iter().enumerate() {
+            let w = fibonacci_word_exact(n);
+            assert_eq!(w.len(), expected, "fibonacci_word_exact({}) should have length {}", n, expected);
+        }
+    }
+
+    #[test]
+    fn fibonacci_word_exact_counts_are_fibonacci_numbers() {
+        // In fibonacci_word_exact(n), the counts of 0s and 1s are
+        // consecutive Fibonacci numbers — this is exact, not approximate.
+        //
+        // n=7: length 34, with exactly 21 zeros and 13 ones.
+        // (13, 21, 34) are three consecutive Fibonacci numbers.
+        let w = fibonacci_word_exact(7);
+        let ones = w.iter().filter(|&&b| b == 1).count();
+        let zeros = w.iter().filter(|&&b| b == 0).count();
+        assert_eq!(w.len(), 34);
+        assert_eq!(zeros, 21, "exact Fibonacci count: 21 zeros");
+        assert_eq!(ones, 13, "exact Fibonacci count: 13 ones");
+    }
+
+    #[test]
+    fn fibonacci_word_exact_is_sturmian() {
+        // The morphism word is the *characteristic* Sturmian word c_alpha,
+        // which differs from the mechanical word s_{alpha,0} by a shift.
+        // Both have identical complexity and frequency properties.
+        let w = fibonacci_word_exact(7);
+        for n in 1..=10 {
+            assert_eq!(
+                complexity(&w, n), n + 1,
+                "morphism Fibonacci word should have Sturmian complexity"
+            );
+        }
     }
 
     #[test]

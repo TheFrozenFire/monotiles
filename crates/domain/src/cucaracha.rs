@@ -373,6 +373,34 @@ mod tests {
     }
 
     #[test]
+    fn aperiodicity_witness_r1_on_beta_alpha() {
+        // The Cucaracha has trivial stabilizer: no non-identity rotation
+        // preserves the tile set. The SPECIFIC witness is:
+        //
+        // Under 60-degree rotation R₆, the element βα = (0,0,1,false)
+        // maps to R₆ * βα = (0,0,2,false), which is NOT in the Cucaracha.
+        //
+        // This means R₆ ∉ Stab(C), proving no 6-fold symmetry.
+        // Combined with checking R₆² and R₆³, this proves trivial stabilizer.
+        let r6 = CoxeterElement::new(0, 0, 1, false); // R₆ = 60-degree rotation
+        let elements = cucaracha();
+        let elements_set: HashSet<_> = elements.iter().collect();
+
+        // βα is element 5: (0,0,1,false)
+        let beta_alpha = elements[5];
+        assert_eq!(beta_alpha, CoxeterElement::new(0, 0, 1, false));
+
+        // R₆ * βα = (0,0,2,false) — this is R₆², NOT in the cucaracha
+        let rotated = r6.compose(&beta_alpha);
+        assert_eq!(rotated, CoxeterElement::new(0, 0, 2, false));
+        assert!(
+            !elements_set.contains(&rotated),
+            "R₆ * βα = {:?} should NOT be in the Cucaracha — this is the aperiodicity witness",
+            rotated
+        );
+    }
+
+    #[test]
     fn expand_by_generators_grows() {
         let start: HashSet<_> = [CoxeterElement::identity()].into_iter().collect();
         let expanded_0 = super::expand_by_generators(&start, 0);
