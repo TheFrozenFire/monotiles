@@ -308,6 +308,122 @@ Proof.
   vm_compute; intuition.
 Qed.
 
+(** D_6 is closed under inverse. *)
+Theorem d6_inverse_closed : forall g,
+  In g d6_elements -> In (cox_inverse g) d6_elements.
+Proof.
+  intros g Hg. simpl in Hg.
+  decompose [or] Hg; subst; try contradiction;
+  vm_compute; intuition.
+Qed.
+
+(** D_6 identity is in the group. *)
+Theorem d6_has_identity : In cox_identity d6_elements.
+Proof. vm_compute. left. reflexivity. Qed.
+
+(** D_6 associativity: holds for all triples (brute-force over 12^3 = 1728 cases).
+    We verify by checking representative triples that cover all generator combinations. *)
+Theorem d6_assoc : forall a b c,
+  In a d6_elements -> In b d6_elements -> In c d6_elements ->
+  cox_compose (cox_compose a b) c = cox_compose a (cox_compose b c).
+Proof.
+  intros a b c Ha Hb Hc.
+  simpl in Ha, Hb, Hc.
+  decompose [or] Ha; decompose [or] Hb; decompose [or] Hc;
+  subst; try contradiction; vm_compute; reflexivity.
+Qed.
+
+(** D_6 right inverse for all elements. *)
+Theorem d6_right_inverse : forall g,
+  In g d6_elements ->
+  cox_compose g (cox_inverse g) = cox_identity.
+Proof.
+  intros g Hg. simpl in Hg.
+  decompose [or] Hg; subst; try contradiction;
+  vm_compute; reflexivity.
+Qed.
+
+(** D_6 left inverse for all elements. *)
+Theorem d6_left_inverse : forall g,
+  In g d6_elements ->
+  cox_compose (cox_inverse g) g = cox_identity.
+Proof.
+  intros g Hg. simpl in Hg.
+  decompose [or] Hg; subst; try contradiction;
+  vm_compute; reflexivity.
+Qed.
+
+(** D_6 right identity for all elements. *)
+Theorem d6_right_identity : forall g,
+  In g d6_elements ->
+  cox_compose g cox_identity = g.
+Proof.
+  intros g Hg. simpl in Hg.
+  decompose [or] Hg; subst; try contradiction;
+  vm_compute; reflexivity.
+Qed.
+
+(** D_6 left identity for all elements. *)
+Theorem d6_left_identity : forall g,
+  In g d6_elements ->
+  cox_compose cox_identity g = g.
+Proof.
+  intros g Hg. simpl in Hg.
+  decompose [or] Hg; subst; try contradiction;
+  vm_compute; reflexivity.
+Qed.
+
+(** ** Coset Decomposition *)
+
+(** Every Coxeter element decomposes as translation * point_group. *)
+Definition cox_translation (g : coxeter_element) : coxeter_element :=
+  mkCoxeter (cox_tx g) (cox_ty g) 0 0.
+
+Definition cox_point_group (g : coxeter_element) : coxeter_element :=
+  mkCoxeter 0 0 (cox_rot g) (cox_refl g).
+
+(** The translation part is a pure translation. *)
+Lemma cox_translation_is_translation : forall g,
+  cox_rot (cox_translation g) = 0 /\ cox_refl (cox_translation g) = 0.
+Proof.
+  intros g. unfold cox_translation. simpl. auto.
+Qed.
+
+(** The point group part has zero translation. *)
+Lemma cox_point_group_is_point_group : forall g,
+  cox_tx (cox_point_group g) = 0 /\ cox_ty (cox_point_group g) = 0.
+Proof.
+  intros g. unfold cox_point_group. simpl. auto.
+Qed.
+
+(** Decomposition is correct when rotation is in [0,6) and reflection is binary.
+    translation * point_group = original element. *)
+Theorem coset_decompose_correct : forall g : coxeter_element,
+  0 <= cox_rot g < 6 -> cox_refl g = 0 \/ cox_refl g = 1 ->
+  cox_compose (cox_translation g) (cox_point_group g) = g.
+Proof.
+  intros [tx ty rot rf] Hrot Hrefl. simpl in *.
+  assert (Hrot6 : rot = 0 \/ rot = 1 \/ rot = 2 \/ rot = 3 \/ rot = 4 \/ rot = 5) by lia.
+  destruct Hrefl as [Hs | Hs]; rewrite Hs;
+  decompose [or] Hrot6; subst;
+  unfold cox_compose, cox_translation, cox_point_group,
+         act_on, reflect_hex, rotate_hex,
+         cox_tx, cox_ty, cox_rot, cox_refl, mkCoxeter;
+  simpl; f_equal; lia.
+Qed.
+
+(** The point group part of any well-formed element is in D6. *)
+Theorem coset_point_group_in_d6 : forall g : coxeter_element,
+  0 <= cox_rot g < 6 -> cox_refl g = 0 \/ cox_refl g = 1 ->
+  In (cox_point_group g) d6_elements.
+Proof.
+  intros [tx ty rot rf] Hrot Hrefl. simpl in *.
+  unfold cox_point_group. simpl.
+  assert (rot = 0 \/ rot = 1 \/ rot = 2 \/ rot = 3 \/ rot = 4 \/ rot = 5) by lia.
+  destruct Hrefl as [Hs | Hs]; rewrite Hs;
+  decompose [or] H; subst; simpl; intuition.
+Qed.
+
 (** ** Rotation Properties *)
 
 Theorem rotation_period_6 : forall a b,

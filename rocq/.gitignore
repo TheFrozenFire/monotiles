@@ -9,3 +9,5 @@
 Makefile.conf
 Makefile
 .coqdeps.d
+.lia.cache
+.nia.cache

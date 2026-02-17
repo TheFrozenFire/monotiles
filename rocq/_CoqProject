@@ -3,3 +3,5 @@
 -arg -native-compiler -arg no
 
 CoxeterGroup.v
+Cucaracha.v
+HatSpectral.v
