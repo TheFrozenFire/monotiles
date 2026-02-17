@@ -71,6 +71,19 @@ enum Commands {
         #[arg(short = 'r', long, default_value_t = 1.5)]
         hole_radius: f64,
     },
+
+    /// Analyze one-way substitution function (deflation locality)
+    Oneway {
+        /// Seed metatile type: H, T, P, or F
+        #[arg(default_value = "H")]
+        seed: String,
+        /// Hierarchy depth (substitution levels)
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        /// Maximum neighborhood radius to test
+        #[arg(short = 'r', long, default_value_t = 5)]
+        max_radius: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -88,6 +101,7 @@ fn main() -> Result<()> {
         Commands::Prove { seed, depth, queries } => cmd_prove(&seed, depth, queries),
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
+        Commands::Oneway { seed, depth, max_radius } => cmd_oneway(&seed, depth, max_radius),
     }
 }
 
@@ -437,6 +451,162 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
     match result {
         Ok(()) => println!("\nVerification: ACCEPTED ({:?})", verify_time),
         Err(e) => println!("\nVerification: REJECTED - {} ({:?})", e, verify_time),
+    }
+
+    Ok(())
+}
+
+fn cmd_oneway(seed: &str, depth: usize, max_radius: usize) -> Result<()> {
+    use std::time::Instant;
+
+    let seed_type = match seed.to_uppercase().as_str() {
+        "H" => tiling::metatile::MetatileType::H,
+        "T" => tiling::metatile::MetatileType::T,
+        "P" => tiling::metatile::MetatileType::P,
+        "F" => tiling::metatile::MetatileType::F,
+        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
+    };
+
+    println!(
+        "One-way substitution analysis: seed={:?}, depth={}, max_radius={}\n",
+        seed_type, depth, max_radius
+    );
+
+    let t0 = Instant::now();
+    let result = tiling::oneway::analyze(seed_type, depth, max_radius);
+    let elapsed = t0.elapsed();
+
+    // Hierarchy stats
+    println!("Hierarchy ({:?}):", elapsed);
+    println!(
+        "{:<8} {:>10}",
+        "Level", "Tiles"
+    );
+    for (level, &count) in result.tiles_per_level.iter().enumerate() {
+        println!("{:<8} {:>10}", level, count);
+    }
+
+    // Per-level determination radius with full sibling adjacency
+    println!("\n--- Full sibling adjacency (all siblings mutually adjacent) ---");
+    for (level, lr) in result.full_sibling.iter().enumerate() {
+        println!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
+        if lr.radii_histogram.is_empty() && lr.undetermined == 0 {
+            println!("  (no tiles)");
+            continue;
+        }
+        for (&radius, &count) in &lr.radii_histogram {
+            println!("  radius {}: {} tiles", radius, count);
+        }
+        if lr.undetermined > 0 {
+            println!("  undetermined: {} tiles", lr.undetermined);
+        }
+        if let Some(max) = lr.max_radius {
+            println!(
+                "  summary: min={}, max={}, mean={:.2}",
+                lr.min_radius.unwrap(),
+                max,
+                lr.mean_radius
+            );
+        }
+    }
+
+    // Per-level determination radius with inflation adjacency
+    println!("\n--- Intra-supertile inflation adjacency (sparser graph) ---");
+    for (level, lr) in result.inflation_adj.iter().enumerate() {
+        println!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
+        if lr.radii_histogram.is_empty() && lr.undetermined == 0 {
+            println!("  (no tiles)");
+            continue;
+        }
+        for (&radius, &count) in &lr.radii_histogram {
+            println!("  radius {}: {} tiles", radius, count);
+        }
+        if lr.undetermined > 0 {
+            println!("  undetermined: {} tiles", lr.undetermined);
+        }
+        if let Some(max) = lr.max_radius {
+            println!(
+                "  summary: min={}, max={}, mean={:.2}",
+                lr.min_radius.unwrap(),
+                max,
+                lr.mean_radius
+            );
+        }
+    }
+
+    // Decomposition and deflation
+    println!("\n--- Type-bag decomposition ---");
+    println!(
+        "Base level decomposition count: {} (unique = {})",
+        result.base_decomposition_count,
+        result.base_decomposition_count == 1
+    );
+
+    println!("\n--- Greedy deflation ---");
+    println!("Success rate: {:.1}%", result.greedy_success_rate * 100.0);
+
+    println!("\n--- Local deflation (radius 1, full sibling adj) ---");
+    println!("Unresolved tiles: {}", result.local_deflate_unresolved);
+
+    // Summary verdict
+    println!("\n=== VERDICT ===");
+    let all_determined_full = result.full_sibling.iter().all(|lr| lr.undetermined == 0);
+    let max_full_radius = result
+        .full_sibling
+        .iter()
+        .filter_map(|lr| lr.max_radius)
+        .max()
+        .unwrap_or(0);
+
+    let all_determined_infl = result.inflation_adj.iter().all(|lr| lr.undetermined == 0);
+
+    if all_determined_full {
+        println!(
+            "Full sibling adjacency: LOCALLY SOLVABLE at radius {}",
+            max_full_radius
+        );
+    } else {
+        println!("Full sibling adjacency: REQUIRES GLOBAL CONTEXT (some tiles undetermined)");
+    }
+
+    if all_determined_infl {
+        let max_infl = result
+            .inflation_adj
+            .iter()
+            .filter_map(|lr| lr.max_radius)
+            .max()
+            .unwrap_or(0);
+        println!(
+            "Inflation adjacency: LOCALLY SOLVABLE at radius {}",
+            max_infl
+        );
+    } else {
+        let total_undetermined: usize = result.inflation_adj.iter().map(|lr| lr.undetermined).sum();
+        println!(
+            "Inflation adjacency: {} tiles undetermined within radius {} \
+             (H' supertile is disconnected in inflation graph)",
+            total_undetermined, max_radius
+        );
+    }
+
+    if result.base_decomposition_count == 1 {
+        println!("Type-bag decomposition: UNIQUE (composition counts fully determine supertile counts)");
+    } else {
+        println!(
+            "Type-bag decomposition: {} valid decompositions",
+            result.base_decomposition_count
+        );
+    }
+
+    if all_determined_full && result.base_decomposition_count == 1 {
+        println!("\nConclusion: Deflation is NOT a one-way function.");
+        println!(
+            "The asymmetry is implementation convenience, not computational hardness."
+        );
+        println!(
+            "Local information (radius {}) suffices to determine parent assignments.",
+            max_full_radius
+        );
     }
 
     Ok(())
