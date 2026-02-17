@@ -19,6 +19,10 @@ ark-bls12-381 = { version = "0.5", default-features = false, features = ["scalar
 domain = { path = "crates/domain" }
 tiling = { path = "crates/tiling" }
 analysis = { path = "crates/analysis" }
+iop = { path = "crates/iop" }
+
+# Hashing
+blake3 = "1"
 
 # Utilities
 anyhow = "1"

@@ -49,6 +49,19 @@ enum Commands {
         levels: usize,
     },
 
+    /// Run the tiling-based interactive oracle proof
+    Prove {
+        /// Seed metatile type: H, T, P, or F
+        #[arg(default_value = "H")]
+        seed: String,
+        /// Hierarchy depth (number of folding rounds)
+        #[arg(short, long, default_value_t = 4)]
+        depth: usize,
+        /// Number of queries per round
+        #[arg(short, long, default_value_t = 8)]
+        queries: usize,
+    },
+
     /// Demonstrate hole recovery (erase + recover + verify)
     Recover {
         /// Number of inflation levels for the initial patch
@@ -72,6 +85,7 @@ fn main() -> Result<()> {
         Commands::Sturmian { terms } => cmd_sturmian(terms),
         Commands::Matrix => cmd_matrix(),
         Commands::Fields => cmd_fields(),
+        Commands::Prove { seed, depth, queries } => cmd_prove(&seed, depth, queries),
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
     }
@@ -362,6 +376,68 @@ fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
         verification.unmatched_originals.len()
     );
     println!("  Extra recovered: {}", verification.extra_recovered);
+
+    Ok(())
+}
+
+fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
+    use ark_bls12_381::Fr;
+    use std::time::Instant;
+
+    let seed_type = match seed.to_uppercase().as_str() {
+        "H" => tiling::metatile::MetatileType::H,
+        "T" => tiling::metatile::MetatileType::T,
+        "P" => tiling::metatile::MetatileType::P,
+        "F" => tiling::metatile::MetatileType::F,
+        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
+    };
+
+    println!("Tiling IOP: seed={:?}, depth={}, queries={}\n", seed_type, depth, num_queries);
+
+    // Build hierarchy
+    let t0 = Instant::now();
+    let mut hierarchy = iop::hierarchy::build_hierarchy::<Fr>(seed_type, depth);
+    let build_time = t0.elapsed();
+
+    let base_tiles = hierarchy.levels[0].tile_types.len();
+    println!("Hierarchy: {} base tiles, {} levels", base_tiles, depth + 1);
+    println!("  Build time: {:?}", build_time);
+
+    // Fill level 0 with deterministic witness values
+    for i in 0..base_tiles {
+        hierarchy.levels[0].values[i] = Fr::from((i as u64 + 1) * 7 + 13);
+    }
+
+    // Prove
+    let t1 = Instant::now();
+    let proof = iop::prover::prove(&mut hierarchy, num_queries);
+    let prove_time = t1.elapsed();
+
+    // Estimate proof size (number of openings * ~64 bytes each + commitments)
+    let total_openings: usize = proof.queries.iter()
+        .flat_map(|round| round.iter())
+        .map(|qr| 1 + qr.children.len())  // supertile + children
+        .sum();
+    let total_commitments = proof.commitment.level_commitments.len();
+    let est_proof_size = total_commitments * 32  // Merkle roots
+        + total_openings * 32 * 10  // rough estimate: hash path ~10 nodes deep
+        + total_openings * 32;  // field elements
+
+    println!("\nProof generated:");
+    println!("  Prove time: {:?}", prove_time);
+    println!("  Commitments: {}", total_commitments);
+    println!("  Total Merkle openings: {}", total_openings);
+    println!("  Est. proof size: ~{:.1} KB", est_proof_size as f64 / 1024.0);
+
+    // Verify
+    let t2 = Instant::now();
+    let result = iop::verifier::verify(&proof);
+    let verify_time = t2.elapsed();
+
+    match result {
+        Ok(()) => println!("\nVerification: ACCEPTED ({:?})", verify_time),
+        Err(e) => println!("\nVerification: REJECTED - {} ({:?})", e, verify_time),
+    }
 
     Ok(())
 }
