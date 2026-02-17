@@ -7,3 +7,5 @@ Cucaracha.v
 HatSpectral.v
 Sturmian.v
 Substitution.v
+Recognizability.v
+LocalRecoverability.v

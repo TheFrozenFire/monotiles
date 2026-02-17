@@ -38,6 +38,26 @@ enum Commands {
 
     /// Verify field extension properties
     Fields,
+
+    /// Demonstrate deflation on a generated patch
+    Deflate {
+        /// Seed metatile type: H, T, P, or F
+        #[arg(default_value = "H")]
+        seed: String,
+        /// Number of inflation levels for the initial patch
+        #[arg(short, long, default_value_t = 3)]
+        levels: usize,
+    },
+
+    /// Demonstrate hole recovery (erase + recover + verify)
+    Recover {
+        /// Number of inflation levels for the initial patch
+        #[arg(short, long, default_value_t = 3)]
+        levels: usize,
+        /// Radius of the erased region
+        #[arg(short = 'r', long, default_value_t = 1.5)]
+        hole_radius: f64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -52,6 +72,8 @@ fn main() -> Result<()> {
         Commands::Sturmian { terms } => cmd_sturmian(terms),
         Commands::Matrix => cmd_matrix(),
         Commands::Fields => cmd_fields(),
+        Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
+        Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
     }
 }
 
@@ -234,6 +256,112 @@ fn cmd_matrix() -> Result<()> {
     println!("\nEigenvalues: phi^4 = (7+3*sqrt(5))/2, 1, -1, (7-3*sqrt(5))/2");
     println!("  phi^4 ~= 6.854 (area inflation factor)");
     println!("  phi^2 ~= 2.618 (edge length inflation factor)");
+
+    Ok(())
+}
+
+fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
+    let seed_type = match seed.to_uppercase().as_str() {
+        "H" => tiling::metatile::MetatileType::H,
+        "T" => tiling::metatile::MetatileType::T,
+        "P" => tiling::metatile::MetatileType::P,
+        "F" => tiling::metatile::MetatileType::F,
+        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
+    };
+
+    let patch = tiling::geometry::generate_patch(seed_type, levels);
+    println!(
+        "Generated level-{} patch from {:?}: {} metatiles\n",
+        levels,
+        seed_type,
+        patch.tiles.len()
+    );
+
+    let result = tiling::deflation::deflate(&patch);
+    println!("Deflation result (level {} -> level {}):", levels, result.supertile_level);
+    println!("  Supertiles: {}", result.supertiles.len());
+    println!("  Unresolved boundary tiles: {}", result.unresolved.len());
+
+    // Count supertile types
+    let mut type_counts = [0usize; 4];
+    for st in &result.supertiles {
+        match st.tile_type {
+            tiling::metatile::MetatileType::H => type_counts[0] += 1,
+            tiling::metatile::MetatileType::T => type_counts[1] += 1,
+            tiling::metatile::MetatileType::P => type_counts[2] += 1,
+            tiling::metatile::MetatileType::F => type_counts[3] += 1,
+        }
+    }
+    println!(
+        "  Type counts: H={}, T={}, P={}, F={}",
+        type_counts[0], type_counts[1], type_counts[2], type_counts[3]
+    );
+
+    // Inflate back and verify round-trip
+    let reinflated = tiling::deflation::inflate_patch(&result.supertiles);
+    println!(
+        "\nRound-trip: inflate {} supertiles -> {} metatiles (original: {})",
+        result.supertiles.len(),
+        reinflated.tiles.len(),
+        patch.tiles.len()
+    );
+
+    Ok(())
+}
+
+fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
+    let patch = tiling::geometry::generate_patch(tiling::metatile::MetatileType::H, levels);
+    println!(
+        "Generated level-{} H-patch: {} metatiles\n",
+        levels,
+        patch.tiles.len()
+    );
+
+    // Erase region centered on the first tile
+    let center = &patch.tiles[0];
+    let (cx, cy) = (center.x, center.y);
+    let holey = tiling::recovery::HoleyTiling::erase_region(&patch, cx, cy, hole_radius);
+
+    println!(
+        "Erased region: center=({:.3}, {:.3}), radius={:.3}",
+        cx, cy, hole_radius
+    );
+    println!(
+        "  Erased tiles: {}",
+        holey.hole_positions.len()
+    );
+    println!(
+        "  Remaining tiles: {}",
+        holey.exterior.tiles.len()
+    );
+
+    if holey.hole_positions.is_empty() {
+        println!("\nNo tiles in the erased region. Try a larger radius.");
+        return Ok(());
+    }
+
+    // Recover
+    let result = tiling::recovery::recover(&holey);
+    println!("\nRecovery result:");
+    println!("  Deflation levels used: {}", result.deflation_levels);
+    println!("  Recovered tiles: {}", result.recovered_tiles.len());
+    println!("  Success: {}", result.success);
+
+    // Verify
+    let verification = tiling::recovery::verify_recovery(
+        &holey.hole_positions,
+        &result.recovered_tiles,
+        0.5,
+    );
+    println!("\nVerification:");
+    println!("  Original erased: {}", verification.original_count);
+    println!("  Recovered: {}", verification.recovered_count);
+    println!("  Matched: {}", verification.matched);
+    println!(
+        "  Unmatched originals: {}",
+        verification.unmatched_originals.len()
+    );
+    println!("  Extra recovered: {}", verification.extra_recovered);
 
     Ok(())
 }
