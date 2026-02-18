@@ -114,3 +114,55 @@ All 200 random cotilers tested had trivial stabilizer. The threefold symmetry (r
 All three problems are easy or show only brute-force combinatorial hardness (not algebraic hardness). The virtually abelian structure of Gamma = Z² ⋊ D₆ makes group-theoretic hard problems (word problem, conjugacy problem) trivially solvable. The tiling constraint adds a geometric overlap check but does not create cryptographically useful hardness — it's an NP-style constraint satisfaction problem, not a one-way function.
 
 The recovery scaling is exponential in cotiler size, but this is a consequence of naive subset enumeration over a polynomially-growing candidate pool, not of any deep algebraic structure. The coset comparison confirms this: exploiting the group's Z² ⋊ D₆ decomposition provides zero speedup because the hardness was never group-theoretic to begin with.
+
+## Erasure Resilience and the P'↔F' Vulnerability
+
+The hat tiling's recoverability has a specific structural weakness and a graceful degradation profile under random erasure.
+
+### The only confusable pair: P' and F'
+
+Of all four supertile types, only one valid single-tile swap exists: P' (5 children) + 1 F-tile = F' (6 children). Their child type-bags differ by exactly one F-tile, so a P-supertile can be misidentified as an F-supertile if its boundary F-tile is present.
+
+Despite this, **zero child positions are critical** — every position in every supertile type is individually redundant. The minimum determining sets are:
+
+| Supertile | Children | Min determining set | Key |
+|-----------|----------|-------------------|-----|
+| H' | 10 | 1 tile (pos 3, a T) | T only appears in H-supertiles |
+| T' | 1 | 1 tile (pos 0, an H) | Only 1 child total |
+| P' | 5 | All 5 | Confusable with F' |
+| F' | 6 | All 6 | Confusable with P' |
+
+### Erasure threshold
+
+Random erasure of base tiles from a depth-3 H-patch (442 tiles):
+
+| Erasure % | Surviving % | Determined % |
+|-----------|------------|-------------|
+| 0% | 100.0% | 100.0% |
+| 10% | 90.0% | 79.7% |
+| 30% | 69.9% | 67.8% |
+| 50% | 50.0% | 60.2% |
+| 70% | 30.1% | 48.0% |
+| 90% | 10.0% | 35.6% |
+
+The "Determined %" exceeds "Surviving %" at erasure fractions above ~45% — meaning the hierarchical structure allows recovery of more tiles than survive the erasure. The phase transition to complete loss is at ~60-70% erasure.
+
+### Dependency graph structure
+
+The recovery dependency graph (radius 1) has 360 edges, cycles, and a bimodal in-degree distribution: 370 tiles with degree 0 (self-determined) and 72 tiles with degree 5 (dependent on all siblings). Maximum chain length is 4.
+
+## Tiling IOP Performance (#9)
+
+Concrete measurements for the hat-tiling-based interactive oracle proof at depth 4 (3025 base tiles, 5 hierarchy levels):
+
+| Metric | Value |
+|--------|-------|
+| Hierarchy build | 44 µs |
+| Prove time | 1.4 ms |
+| Verify time | 263 µs |
+| Commitments | 5 (one per level) |
+| Merkle openings | 280 (8 queries × 4 rounds × ~8.75 children) |
+| Est. proof size | ~96 KB |
+| Result | ACCEPTED |
+
+The prove/verify ratio is ~5.3x, and both are sub-millisecond at this scale. The proof size is dominated by Merkle openings (280 × ~320 bytes each), not commitments.

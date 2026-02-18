@@ -64,3 +64,34 @@ The formalization verified existing mathematics — we didn't discover new theor
 - Integer vs floating-point structure (Fibonacci counts, palindromic polynomials)
 
 These are exactly the places where bugs hide in computational code and where informal proofs wave their hands. The Rust code was correct, but the formalization explained *why* it was correct in ways the code alone couldn't.
+
+## Finite Patches Are Boundary-Dominated
+
+Deflating a level-3 H-patch (442 metatiles) produces only 4 interior supertiles and **403 unresolved boundary tiles** — 91% of the patch. The interior is tiny compared to the boundary because a level-3 patch is only one supertile deep: its 10 level-0 children expand to 442 tiles, but only 4 of those children form complete supertiles when deflated one more level.
+
+This means any experiment on deflation must account for boundary effects. Testing "can we deflate?" on a finite patch is misleading unless you distinguish interior (easily deflatable) from boundary (inherently ambiguous without neighboring supertile context). The one-way analysis sidesteps this by working within the hierarchy itself, not on a geometric patch.
+
+## Recovery Over-Generates by Design
+
+Erasing 3 tiles from a 442-tile patch and running recovery produces **251 recovered tiles** — 83x the erasure size. All 3 erased tiles are correctly matched, but 248 are "extra." This isn't a bug: recovery works by deflating the surrounding context to identify the supertile structure, then re-inflating. It necessarily regenerates the entire supertile region, not just the erased tiles.
+
+This has implications for any error-correcting code built on tiling recovery: the correction granularity is the supertile, not the individual tile. You can't surgically fix one tile without regenerating its entire neighborhood.
+
+## Type-Bag Confusability Follows from Subset Relations
+
+The P'↔F' swap (the only valid single-tile swap in the hat system) exists because F' = P' + 1F at the type-bag level. The child multisets are:
+
+```
+P' = {2H, 1P, 2F}  (5 children)
+F' = {2H, 1P, 3F}  (6 children)
+```
+
+P's bag is a sub-multiset of F's bag. Any supertile type whose bag is a sub-multiset of another's creates a potential swap. The hat system has exactly one such pair. The spectre system (2 types, no subset relations between their child bags) has **zero** confusable pairs.
+
+This means confusability is a property of the substitution matrix's column structure, not of the geometry. You can predict all confusable pairs from the matrix alone without generating any tiles.
+
+## H-Supertile Identification Requires Only One T-Tile
+
+The minimum determining set for H' is a single tile: the T at position 3. This works because T-type children appear **only** in H-supertiles (the T' row of the substitution matrix is [1, 0, 0, 0]). Seeing any T-child immediately identifies the parent as H.
+
+In contrast, P' and F' require all their children because they differ by only one F-tile and share all other child types. The determining set size is controlled by the confusability structure, not the supertile size.
