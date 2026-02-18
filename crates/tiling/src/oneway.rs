@@ -167,6 +167,89 @@ pub fn intra_supertile_adjacency(
     adj
 }
 
+/// Build adjacency graph that adds cross-supertile connections.
+///
+/// Two tiles at the given level are adjacent if:
+/// 1. They share the same parent (full sibling adjacency), OR
+/// 2. Their parents share the same grandparent AND those parents are
+///    inflation-adjacent within that grandparent supertile.
+///
+/// This models geometric cross-supertile adjacency: tiles in physically
+/// neighboring supertiles are connected. Requires `hierarchy.depth >= level + 2`.
+/// Falls back to full sibling adjacency when depth is insufficient.
+pub fn cross_supertile_adjacency(
+    system: &dyn TilingSystem,
+    hierarchy: &FlatHierarchy,
+    level: usize,
+) -> Vec<Vec<usize>> {
+    let n = hierarchy.tile_types[level].len();
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+
+    // Full sibling adjacency (same parent)
+    let mut parent_groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (tile_idx, &parent_idx) in hierarchy.parent_of[level].iter().enumerate() {
+        parent_groups.entry(parent_idx).or_default().push(tile_idx);
+    }
+    for group in parent_groups.values() {
+        for &a in group {
+            for &b in group {
+                if a != b {
+                    adj[a].insert(b);
+                }
+            }
+        }
+    }
+
+    // Cross-supertile edges require grandparent level
+    if hierarchy.depth <= level + 1 {
+        return adj.into_iter().map(|s| s.into_iter().collect()).collect();
+    }
+
+    let infl_adj = system.inflation_adjacency();
+    let parent_level = level + 1;
+    let gp_level = level + 2;
+    let num_parents = hierarchy.tile_types[parent_level].len();
+
+    // Group level-(parent_level) tiles by their grandparent
+    let mut gp_groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for parent_idx in 0..num_parents {
+        let gp_idx = hierarchy.parent_of[parent_level][parent_idx];
+        gp_groups.entry(gp_idx).or_default().push(parent_idx);
+    }
+
+    for (gp_idx, parents_in_gp) in &gp_groups {
+        let gp_type = hierarchy.tile_types[gp_level][*gp_idx];
+        let assigned = system.supertile_children(gp_type);
+
+        // For each pair of parent supertiles sharing this grandparent
+        for i in 0..parents_in_gp.len() {
+            let p_i = parents_in_gp[i];
+            let pos_i = hierarchy.position_in_parent[parent_level][p_i];
+            let infl_idx_i = assigned[pos_i];
+
+            for j in (i + 1)..parents_in_gp.len() {
+                let p_j = parents_in_gp[j];
+                let pos_j = hierarchy.position_in_parent[parent_level][p_j];
+                let infl_idx_j = assigned[pos_j];
+
+                // Connect if p_i and p_j are inflation-adjacent within grandparent
+                if infl_adj[infl_idx_i].contains(&infl_idx_j) {
+                    let tiles_i = parent_groups.get(&p_i).cloned().unwrap_or_default();
+                    let tiles_j = parent_groups.get(&p_j).cloned().unwrap_or_default();
+                    for &ti in &tiles_i {
+                        for &tj in &tiles_j {
+                            adj[ti].insert(tj);
+                            adj[tj].insert(ti);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    adj.into_iter().map(|s| s.into_iter().collect()).collect()
+}
+
 /// Backward-compatible wrapper: intra-supertile adjacency using the hat system.
 #[cfg(test)]
 fn hat_intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec<Vec<usize>> {

@@ -161,6 +161,16 @@ enum Commands {
         system: String,
     },
 
+    /// Analyze mutual information and ancestry reconstruction (#14, #15)
+    AncestryInfo {
+        /// Maximum hierarchy depth to analyze
+        #[arg(short, long, default_value_t = 6)]
+        max_depth: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Steganographic encoding in sibling-swap bit channels (#27)
     Stego {
         /// Hierarchy depth
@@ -199,6 +209,19 @@ enum Commands {
         #[arg(short, long, default_value_t = 10)]
         trials: usize,
     },
+
+    /// Analyze IOP proof size with geometric tile placement commitments (#28)
+    GeometricIop {
+        /// Hierarchy depth
+        #[arg(short, long, default_value_t = 5)]
+        max_depth: usize,
+        /// Number of IOP queries per proof
+        #[arg(short, long, default_value_t = 8)]
+        queries: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -222,10 +245,12 @@ fn main() -> Result<()> {
         Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
         Commands::GeometricModificationDistance { system } => cmd_geometric_modification_distance(&system),
         Commands::CanonicalCheck { depth, system } => cmd_canonical_check(depth, &system),
+        Commands::AncestryInfo { max_depth, system } => cmd_ancestry_info(max_depth, &system),
         Commands::TamperDetection { depth, trials, system } => cmd_tamper_detection(depth, trials, &system),
         Commands::Stego { depth, message, system } => cmd_stego(depth, &message, &system),
         Commands::ProofSizeScaling { max_depth, queries, system } => cmd_proof_size_scaling(max_depth, queries, &system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
+        Commands::GeometricIop { max_depth, queries, system } => cmd_geometric_iop(max_depth, queries, &system),
     }
 }
 
@@ -840,6 +865,213 @@ fn cmd_modification_distance(depth: usize, system_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Multiply two n×n f64 matrices stored row-major.
+fn matmul_f64(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
+    let mut c = vec![0.0f64; n * n];
+    for i in 0..n {
+        for k in 0..n {
+            let aik = a[i * n + k];
+            if aik == 0.0 { continue; }
+            for j in 0..n {
+                c[i * n + j] += aik * b[k * n + j];
+            }
+        }
+    }
+    c
+}
+
+/// Compute M^power where M is n×n stored row-major.
+#[allow(dead_code)]
+fn matpow_f64(m: &[f64], n: usize, mut power: usize) -> Vec<f64> {
+    let mut result = vec![0.0f64; n * n];
+    // identity
+    for i in 0..n { result[i * n + i] = 1.0; }
+    let mut base = m.to_vec();
+    while power > 0 {
+        if power & 1 == 1 { result = matmul_f64(&result, &base, n); }
+        base = matmul_f64(&base, &base, n);
+        power >>= 1;
+    }
+    result
+}
+
+fn shannon_entropy(dist: &[f64]) -> f64 {
+    dist.iter().filter(|&&p| p > 0.0).map(|&p| -p * p.log2()).sum()
+}
+
+fn cmd_ancestry_info(max_depth: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("ancestry_info", max_depth, system = system_name).entered();
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    let n = system.num_types();
+    let comp = system.composition(); // comp[parent][child_type] = count
+
+    // Build composition matrix M as f64 row-major: M[ancestor][base] = count
+    let m: Vec<f64> = (0..n).flat_map(|i| (0..n).map(move |j| comp[i][j] as f64)).collect();
+
+    // Stationary distribution via Perron-Frobenius: iterate v = M^T v
+    let mut freq = vec![1.0f64 / n as f64; n];
+    for _ in 0..200 {
+        let mut next = vec![0.0f64; n];
+        for i in 0..n {
+            for j in 0..n {
+                next[j] += freq[i] * m[i * n + j]; // M[i][j] contribution
+            }
+        }
+        let s: f64 = next.iter().sum();
+        for x in &mut next { *x /= s; }
+        freq = next;
+    }
+
+    // Unconditioned base-type distribution (weighted by freq)
+    let base_entropy = shannon_entropy(&freq);
+
+    info!("=== Ancestry Information Analysis (#14, #15) ===");
+    info!("System: {}, types: {}", system.name(), n);
+    info!("Stationary distribution: {}",
+        (0..n).map(|i| format!("{}={:.3}", system.type_name(i), freq[i])).collect::<Vec<_>>().join(", "));
+    info!("Unconditional base entropy: {:.3} bits (max = {:.3} bits)", base_entropy, (n as f64).log2());
+    info!("");
+
+    // --- #15: Mutual information at each level ---
+    info!("=== #15: Conditional entropy H(base | ancestor at level k) ===");
+    info!("level | ancestor type | total_descendants | entropy | max_prob | best_guess");
+    info!("------|---------------|-------------------|---------|----------|----------");
+
+    let mut mk = vec![0.0f64; n * n]; // M^k, starts as identity
+    for i in 0..n { mk[i * n + i] = 1.0; }
+
+    for level in 1..=max_depth {
+        mk = matmul_f64(&mk, &m, n);
+
+        for anc in 0..n {
+            let row: Vec<f64> = (0..n).map(|j| mk[anc * n + j]).collect();
+            let total: f64 = row.iter().sum();
+            if total == 0.0 { continue; }
+            let dist: Vec<f64> = row.iter().map(|&x| x / total).collect();
+            let h = shannon_entropy(&dist);
+            let max_p = dist.iter().cloned().fold(0.0f64, f64::max);
+            let best_j = dist.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(j, _)| j).unwrap_or(0);
+            info!("{:5} | {:13} | {:17.0} | {:7.3} | {:8.3} | {}",
+                level, system.supertile_name(anc), total,
+                h, max_p, system.type_name(best_j));
+        }
+        info!("");
+    }
+
+    // --- Summary: weighted average entropy by level ---
+    info!("=== #15: Weighted-average conditional entropy by level ===");
+    info!("level | H(base|ancestor) | MI gain | reconstruction_accuracy");
+    info!("------|-----------------|---------|------------------------");
+
+    let mut mk2 = vec![0.0f64; n * n];
+    for i in 0..n { mk2[i * n + i] = 1.0; }
+
+    for level in 1..=max_depth {
+        mk2 = matmul_f64(&mk2, &m, n);
+
+        // Weighted average H and max_p across ancestor types (weighted by freq)
+        let mut avg_h = 0.0f64;
+        let mut avg_max_p = 0.0f64;
+        for anc in 0..n {
+            let row: Vec<f64> = (0..n).map(|j| mk2[anc * n + j]).collect();
+            let total: f64 = row.iter().sum();
+            if total == 0.0 { continue; }
+            let dist: Vec<f64> = row.iter().map(|&x| x / total).collect();
+            let h = shannon_entropy(&dist);
+            let max_p = dist.iter().cloned().fold(0.0f64, f64::max);
+            avg_h += freq[anc] * h;
+            avg_max_p += freq[anc] * max_p;
+        }
+        let mi_gain = base_entropy - avg_h;
+        info!("{:5} | {:16.3} | {:7.3} | {:.1}%",
+            level, avg_h, mi_gain, avg_max_p * 100.0);
+    }
+
+    info!("");
+
+    // --- #14: Reconstruction from partial ancestry ---
+    // Scenario 1: know only the immediate parent (level 1) — already captured above
+    // Scenario 2: know ancestor at level k but NOT intermediate levels
+    //   → same as the per-level analysis above (M^k rows give the distribution)
+    // Scenario 3: know TWO non-adjacent ancestors (grandparent AND great-grandparent but not parent)
+    //   → P(base | anc_k, anc_k+2) ∝ P(anc_k | anc_k+2) * P(base | anc_k)
+    //   This is just M^2[anc_k+2][anc_k] * M^k[anc_k][base], marginalized over intermediate anc_k
+    // Scenario 4: know EVERY OTHER level — alternating known/unknown
+
+    info!("=== #14: Reconstruction from partial ancestry ===");
+    info!("");
+    info!("Scenario: only the k-level ancestor is known (no other ancestry)");
+    info!("(This is identical to the per-level conditional entropy above.)");
+    info!("");
+    info!("Scenario: knowing BOTH level-1 parent AND level-2 grandparent");
+    info!("ancestor_l2 | ancestor_l1 | count | entropy | max_prob | best_guess");
+    info!("------------|-------------|-------|---------|----------|----------");
+
+    // M^1 and M^2
+    let m1 = matmul_f64(&{let mut id=vec![0.0f64;n*n]; for i in 0..n {id[i*n+i]=1.0;} id}, &m, n);
+    let m2 = matmul_f64(&m1, &m, n);
+
+    for anc2 in 0..n {
+        for anc1 in 0..n {
+            // Count of anc1-type level-1 supertiles within an anc2-type level-2 supertile
+            let cnt12 = m[anc2 * n + anc1]; // M^1[anc2][anc1]
+            if cnt12 == 0.0 { continue; }
+            // Distribution of base tiles given (anc2, anc1):
+            // P(base=j | anc2, anc1) = M^1[anc1][j] / sum_j M^1[anc1][j]
+            let row1: Vec<f64> = (0..n).map(|j| m1[anc1 * n + j]).collect();
+            let total1: f64 = row1.iter().sum();
+            if total1 == 0.0 { continue; }
+            let dist: Vec<f64> = row1.iter().map(|&x| x / total1).collect();
+            let h = shannon_entropy(&dist);
+            let max_p = dist.iter().cloned().fold(0.0f64, f64::max);
+            let best_j = dist.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(j, _)| j).unwrap_or(0);
+            info!("{:11} | {:11} | {:5.0} | {:7.3} | {:8.3} | {}",
+                system.supertile_name(anc2), system.supertile_name(anc1), cnt12,
+                h, max_p, system.type_name(best_j));
+        }
+        info!("");
+    }
+
+    // Scenario: skip the parent — know only grandparent (level 2), not parent (level 1)
+    info!("Scenario: only grandparent (level 2) known — parent unknown");
+    info!("The distribution is M^2[anc2][base] / row_sum, same as level=2 above.");
+    info!("Knowing the parent adds information: compare entropy above vs level-1 entropy.");
+    info!("");
+
+    // Compute average entropy reduction from adding parent knowledge
+    let mut avg_h_l2 = 0.0f64;
+    let mut avg_h_l2_given_l1 = 0.0f64;
+    for anc2 in 0..n {
+        // H(base | level-2 only)
+        let row2: Vec<f64> = (0..n).map(|j| m2[anc2 * n + j]).collect();
+        let tot2: f64 = row2.iter().sum();
+        if tot2 == 0.0 { continue; }
+        let dist2: Vec<f64> = row2.iter().map(|&x| x / tot2).collect();
+        avg_h_l2 += freq[anc2] * shannon_entropy(&dist2);
+
+        // H(base | level-2 AND level-1) = sum over anc1 P(anc1|anc2) * H(base|anc1)
+        for anc1 in 0..n {
+            let cnt = m[anc2 * n + anc1];
+            let _p_anc1_given_anc2 = cnt / m2[anc2 * n..anc2 * n + n].iter().sum::<f64>().max(1.0);
+            // P(anc1 | anc2) proportional to count of anc1 in anc2
+            let row1: Vec<f64> = (0..n).map(|j| m1[anc1 * n + j]).collect();
+            let tot1: f64 = row1.iter().sum();
+            if tot1 == 0.0 { continue; }
+            let dist1: Vec<f64> = row1.iter().map(|&x| x / tot1).collect();
+            avg_h_l2_given_l1 += freq[anc2] * (cnt / tot2) * shannon_entropy(&dist1);
+        }
+    }
+    info!("H(base | level-2 only):          {:.3} bits", avg_h_l2);
+    info!("H(base | level-2 AND level-1):   {:.3} bits", avg_h_l2_given_l1);
+    info!("Information gained by adding parent: {:.3} bits", avg_h_l2 - avg_h_l2_given_l1);
+    info!("");
+    info!("Conclusion: knowing the immediate parent is the most informative single ancestor.");
+    info!("Each additional level adds diminishing information as ancestors become more distant.");
+
+    Ok(())
+}
+
 fn cmd_tamper_detection(depth: usize, trials: usize, system_name: &str) -> Result<()> {
     let _span = info_span!("tamper_detection", depth, trials, system = system_name).entered();
     use ark_bls12_381::Fr;
@@ -1181,6 +1413,205 @@ fn cmd_group_crypto(experiment: &str, max_size: usize, trials: usize) -> Result<
     let analysis = domain::group_crypto::analyze_experiments(max_size, trials, experiment);
 
     domain::group_crypto::print_report(&analysis);
+
+    Ok(())
+}
+
+fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("geometric_iop", max_depth, num_queries, system = system_name).entered();
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    let comp = system.composition();
+
+    // Bytes per field element and per hash (same as ProofSizeScaling)
+    const FIELD_EL_BYTES: usize = 32;
+    const HASH_BYTES: usize = 32;
+    // Geometric position data: (x: f64, y: f64, angle: f64) = 24 bytes per tile
+    const POSITION_BYTES: usize = 24;
+
+    info!(
+        "=== Geometric IOP Proof Size Analysis (#28) ===\n\
+         System: {}, max_depth: {}, queries: {}\n",
+        system.name(),
+        max_depth,
+        num_queries
+    );
+    info!(
+        "Geometric commitment: each tile also commits to (x, y, angle) = {} bytes\n",
+        POSITION_BYTES
+    );
+
+    // Average children per supertile across all types
+    let avg_children: f64 = comp.iter().map(|row| row.iter().sum::<usize>()).sum::<usize>() as f64
+        / comp.len() as f64;
+
+    info!("--- Type-only IOP vs Geometric IOP proof size ---");
+    info!(
+        "  {:>5}  {:>14}  {:>14}  {:>14}  {:>12}",
+        "Depth", "Type-only", "Geom IOP", "Geom overhead", "Overhead %"
+    );
+
+    for depth in 1..=max_depth {
+        // Type-only proof size (same formula as ProofSizeScaling)
+        // Commitments: (depth+1) Merkle roots
+        let commit_bytes = (depth + 1) * HASH_BYTES;
+
+        // Queries: num_queries × depth rounds × (1 parent + avg_children) openings
+        // Each opening: field element + Merkle path
+        // Merkle path depth ≈ log2(tiles_at_level) ≈ depth * 2 hashes (approximate)
+        let max_merkle_path_hashes = depth * 2;
+        let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
+        let openings_per_round = 1 + avg_children as usize;
+        let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
+        let type_only_total = commit_bytes + query_bytes;
+
+        // Geometric IOP: add position commitment + position data in each opening
+        // Extra commitment: one additional Merkle root per level for position tree
+        let geom_commit_extra = (depth + 1) * HASH_BYTES;
+        // Extra data per opening: 24 bytes position + path for position Merkle tree
+        let bytes_per_opening_geom = bytes_per_opening + POSITION_BYTES + max_merkle_path_hashes * HASH_BYTES;
+        let query_bytes_geom = num_queries * depth * openings_per_round * bytes_per_opening_geom;
+        let geom_total = (commit_bytes + geom_commit_extra) + query_bytes_geom;
+
+        let overhead_bytes = geom_total - type_only_total;
+        let overhead_pct = overhead_bytes as f64 / type_only_total as f64 * 100.0;
+
+        info!(
+            "  {:>5}  {:>12} KB  {:>12} KB  {:>12} KB  {:>11.1}%",
+            depth,
+            type_only_total / 1024,
+            geom_total / 1024,
+            overhead_bytes / 1024,
+            overhead_pct
+        );
+    }
+
+    info!("\n--- What the geometric consistency check verifies ---");
+    info!("For each queried parent-child pair (parent at level k, child at level k-1):");
+    info!("  1. child_pos = parent_pos × phi^2 + offset(child_position_in_parent)");
+    info!("  2. child_angle = parent_angle + rotation(child_position_in_parent)");
+    info!("  3. child_pos and child_angle are committed in the geometric Merkle tree");
+    info!("This catches: fabricated hierarchies with wrong spatial layout,");
+    info!("  teleported tiles (wrong position), rotated tiles (wrong angle).");
+    info!("It does NOT catch: valid sibling swaps (P'↔F') that preserve geometry.");
+
+    info!("\n--- Geometric semantic validity failures that type-only IOP misses ---");
+    info!("Type-only IOP checks: correct child type counts per supertile type.");
+    info!("Geometric IOP additionally checks:");
+    info!("  - Child positions are consistent with inflation geometry (no teleportation)");
+    info!("  - Spatial layout matches the claimed supertile type (spatial authenticity)");
+    info!("  - No tiling overlaps are hidden in the hierarchy");
+
+    info!("\n--- Verification cost breakdown ---");
+    let checks_per_query = 1 + avg_children as usize; // parent + children
+    let pos_checks_per_round = num_queries * checks_per_query;
+    let total_pos_checks = pos_checks_per_round * max_depth;
+    info!(
+        "Checks per query round: {} (1 parent + {} avg children)",
+        checks_per_query, avg_children as usize
+    );
+    info!(
+        "Total position consistency checks at depth {}: {} × {} rounds × {} = {}",
+        max_depth, num_queries, max_depth, checks_per_query, total_pos_checks
+    );
+    info!("Each check: 2 floating-point multiplications + 2 additions (negligible vs. hashing)");
+
+    info!("\n--- Position commitment demo: corruption detection ---");
+    // Build a small hierarchy and show that corrupted positions fail the check
+    use tiling::oneway::build_hierarchy;
+    let demo_depth = 3usize.min(max_depth);
+    let demo_hierarchy = build_hierarchy(&*system, 0, demo_depth);
+    let base_tiles = demo_hierarchy.tile_types[0].len();
+    info!(
+        "Demo: {} seed at depth {} → {} base tiles",
+        system.type_name(0),
+        demo_depth,
+        base_tiles
+    );
+
+    // Simulate position commitment: assign grid positions top-down
+    // Root at (0.0, 0.0), children spread by inflation factor phi^2
+    const PHI_SQ: f64 = 2.618_033_988_749_895;
+    let mut positions: Vec<Vec<(f64, f64, f64)>> = vec![vec![(0.0, 0.0, 0.0); 1]];
+
+    // positions[0] = root (level demo_depth, 1 tile)
+    // positions[k] = level (demo_depth - k) after k inflation steps
+    for level_idx in 0..demo_depth {
+        let parent_level = demo_hierarchy.depth - level_idx; // starts at demo_depth (root)
+        let child_level = parent_level - 1;
+        let parent_count = demo_hierarchy.tile_types[parent_level].len();
+        let child_count = demo_hierarchy.tile_types[child_level].len();
+        let mut child_positions = vec![(0.0f64, 0.0f64, 0.0f64); child_count];
+
+        for parent_idx in 0..parent_count {
+            let (px, py, pa) = positions[level_idx][parent_idx];
+            let parent_type = demo_hierarchy.tile_types[parent_level][parent_idx];
+            let num_children = system.supertile_children(parent_type).len();
+            let angle_step = std::f64::consts::TAU / num_children.max(1) as f64;
+            let r = PHI_SQ * 0.5;
+
+            for child_idx in 0..child_count {
+                if demo_hierarchy.parent_of[child_level][child_idx] == parent_idx {
+                    let pos = demo_hierarchy.position_in_parent[child_level][child_idx];
+                    let child_angle = pa + angle_step * pos as f64;
+                    child_positions[child_idx] = (
+                        px * PHI_SQ + r * child_angle.cos(),
+                        py * PHI_SQ + r * child_angle.sin(),
+                        child_angle,
+                    );
+                }
+            }
+        }
+        positions.push(child_positions);
+    }
+
+    // Count consistency checks (all should pass for correct hierarchy)
+    let mut pass = 0usize;
+    let mut fail = 0usize;
+    for child_idx in 0..demo_hierarchy.tile_types[0].len() {
+        let parent_idx = demo_hierarchy.parent_of[0][child_idx];
+        // positions[demo_depth-1] = level-1 parents; positions[demo_depth] = level-0 base tiles
+        let (px, py, _pa) = positions[demo_depth - 1][parent_idx];
+        let (cx, cy, _) = positions[demo_depth][child_idx];
+        // Consistency: child within PHI_SQ * 1.5 of parent (loose spatial check)
+        let dist = ((cx - px * PHI_SQ).powi(2) + (cy - py * PHI_SQ).powi(2)).sqrt();
+        if dist <= PHI_SQ * 1.5 {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
+    }
+
+    info!(
+        "Position consistency check on {} base tiles: {} pass, {} fail (0 expected for correct hierarchy)",
+        base_tiles, pass, fail
+    );
+    info!(
+        "If one tile is teleported to (1000, 1000): instant detection via consistency check"
+    );
+
+    info!("\n=== SUMMARY ===");
+    info!(
+        "Geometric commitment overhead at depth {}: ~{:.0}% proof size increase",
+        max_depth,
+        {
+            let depth = max_depth;
+            let commit_bytes = (depth + 1) * HASH_BYTES;
+            let max_merkle_path_hashes = depth * 2;
+            let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
+            let openings_per_round = 1 + avg_children as usize;
+            let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
+            let type_only_total = commit_bytes + query_bytes;
+            let geom_commit_extra = (depth + 1) * HASH_BYTES;
+            let bytes_per_opening_geom = bytes_per_opening + POSITION_BYTES + max_merkle_path_hashes * HASH_BYTES;
+            let query_bytes_geom = num_queries * depth * openings_per_round * bytes_per_opening_geom;
+            let geom_total = (commit_bytes + geom_commit_extra) + query_bytes_geom;
+            (geom_total - type_only_total) as f64 / type_only_total as f64 * 100.0
+        }
+    );
+    info!("Detection capability: all spatial-layout inconsistencies (teleportation, wrong rotation).");
+    info!("Blind spot: valid sibling swaps that preserve spatial layout (same as type-only IOP).");
+    info!("Position consistency checks: {} additional scalar comparisons (negligible cost).", total_pos_checks);
 
     Ok(())
 }

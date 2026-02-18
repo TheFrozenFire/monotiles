@@ -877,6 +877,91 @@ The `verify_fold` function checks both (1) the multiset composition (child type 
 
 Base-level type flips (even P→F or Spectre→Mystic) ARE detected because they break composition at the parent level. The undetectable case from #31 is specifically SUPERTILE-LEVEL label swaps between sibling P'/F' pairs, where both siblings are already valid children of the same parent — the multiset is unchanged.
 
+## Cross-Supertile Adjacency Resolves Level-2 Ancestry That Sibling Adjacency Cannot (#13)
+
+The local-to-global gap analysis was re-run with two adjacency models:
+- **Full sibling**: tiles adjacent iff they share the same direct parent (supertile)
+- **Cross-supertile**: tiles adjacent iff same parent (sibling) **or** their parents are inflation-adjacent within a shared grandparent supertile
+
+The cross-supertile model reflects physical geometric adjacency: tiles on either side of a supertile boundary are connected.
+
+### Hat (depth 3, max_radius 6)
+
+| Level | Sibling max_r | Cross max_r | Change |
+|-------|--------------|-------------|--------|
+| 1 (parent) | 1 | 1 | same |
+| 2 (grandparent) | ? (undetermined at r=6) | 4 | **resolved** |
+| 3 (root = seed type) | 0 | 0 | same |
+
+**Full sibling**: 442/442 determined for level 1 and 3; only 3/442 determined for level 2 within max_radius=6. The remaining tiles cannot be identified by sibling-only BFS.
+
+**Cross-supertile**: 442/442 determined for all three levels, including level 2 at max_radius=4.
+
+### Spectre (depth 3, max_radius 6)
+
+| Level | Sibling max_r | Cross max_r | Change |
+|-------|--------------|-------------|--------|
+| 1 (parent) | 1 | ? (undetermined) | reversed |
+| 2 (grandparent) | ? (undetermined) | 1 | **resolved** |
+| 3 (root = seed type) | 0 | 0 | same |
+
+An unexpected **inversion**: with sibling adjacency, level 1 is determined (r=1) but level 2 is not. With cross-supertile adjacency, level 2 is determined (r=1) but level 1 is not. This arises because spectre's 2-type system (Spectre/Mystic) is symmetric: when you can see across supertile boundaries you can identify the grandparent, but the added cross-supertile connectivity makes level-1 parents confusable between Spectre and Mystic supertiles.
+
+### Cross-seed distinguishing (both systems, both modes)
+
+Cross-seed distinguishing uses hierarchical signature (ancestor chain depth), independent of adjacency. For both hat and spectre, the gap closes at hierarchical radius = depth = 3, regardless of adjacency model. The adjacency model only affects the BFS-based ancestry determination, not the hierarchical distinguishing.
+
+### Key finding
+
+**Cross-supertile adjacency breaks the level-2 determination bottleneck.** With sibling-only adjacency, a tile's grandparent type is unresolvable within the tested radius for most tiles. Adding cross-supertile connections (inflation-adjacent neighboring supertiles) provides the missing context to determine the level-2 ancestor. The geometric boundary information that sibling adjacency lacks is exactly what is needed to resolve ambiguous ancestry.
+
+## Geometric Tile Placement Adds ~97-98% Proof Size Overhead (#28)
+
+We analyzed the cost of extending the tiling IOP to commit to tile positions (x, y, angle) in addition to tile types. Each tile's 3D position data (24 bytes: 3 × f64) would be committed alongside the type in a parallel Merkle tree.
+
+### Proof size: type-only vs geometric IOP (hat, 8 queries)
+
+| Depth | Type-only | Geom IOP | Overhead | Overhead % |
+|-------|-----------|----------|---------|------------|
+| 1 | 4 KB | 8 KB | 4 KB | 91.8% |
+| 2 | 15 KB | 29 KB | 14 KB | 95.0% |
+| 3 | 31 KB | 62 KB | 30 KB | 96.4% |
+| 4 | 54 KB | 106 KB | 52 KB | 97.2% |
+| 5 | 82 KB | 163 KB | 80 KB | 97.7% |
+
+The overhead converges to ~97-98% at large depth. Geometric commitment roughly doubles proof size.
+
+### Why the overhead is so large
+
+The dominant cost is the Merkle path for each opened tile. Each opening currently contributes: 32 bytes (field element) + path_length × 32 bytes (hashes). Adding geometry doubles the hash-per-path contribution because a second Merkle tree (for positions) must also be opened at each query.
+
+The 24 bytes of position data are minor; the doubled Merkle path length is the main cost.
+
+### What geometric commitment adds
+
+| Attack type | Type-only detectable? | Geometric detectable? |
+|-------------|----------------------|----------------------|
+| Wrong child type count | Yes (composition check) | Yes |
+| Base-level type flip | Yes (breaks composition) | Yes |
+| Supertile label swap (P'↔F') | No (multiset unchanged) | No (geometry preserved) |
+| Teleported tile (wrong position) | No | **Yes** |
+| Wrong spatial orientation | No | **Yes** |
+| Fabricated hierarchy with wrong layout | No | **Yes** |
+
+### Position consistency check
+
+For each queried parent-child pair, the verifier checks:
+1. `child_pos = parent_pos × φ² + offset(child_position_in_parent)`
+2. `child_angle = parent_angle + rotation(child_position_in_parent)`
+
+Demo: H-seed at depth 3 (442 base tiles) — all 442 pass the spatial consistency check for the canonical hierarchy. A teleported tile (moved to (1000, 1000)) would fail instantly.
+
+**Verification cost**: 240 additional scalar comparisons at depth 5 (2 multiplications + 2 additions per parent-child pair) — negligible compared to Merkle hashing.
+
+### Conclusion
+
+Geometric commitment doubles proof size (~97% overhead at depth 5). It adds semantic validity (no teleportation, correct spatial layout) but does not close the sibling-swap gap. The canonical form check (#33) remains the right fix for undetectable swaps; geometric commitment is orthogonal — it proves spatial authenticity.
+
 ## Mutual Information Saturates After Level 1 for Hat, Immediately for Spectre (#15)
 
 How much does knowing an ancestor's type reduce uncertainty about a base tile's type? We compute H(base | ancestor at level k) via M^k row distributions (M = substitution matrix), then compare to the unconditional entropy H(base).

@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 use crate::oneway::{
-    build_hierarchy, full_sibling_adjacency, type_signature, FlatHierarchy, TypeSignature,
+    build_hierarchy, cross_supertile_adjacency, full_sibling_adjacency, type_signature,
+    FlatHierarchy, TypeSignature,
 };
 use crate::systems::TilingSystem;
 
@@ -384,7 +385,11 @@ pub struct GapAnalysis {
     pub depth: usize,
     pub seed_count: usize,
     pub tiles_per_seed: Vec<usize>,
+    /// Ancestry radii with full sibling adjacency (baseline).
     pub ancestry: Vec<AncestryLevelResult>,
+    /// Ancestry radii with cross-supertile adjacency (geometric comparison).
+    /// Empty if depth < 2 (cross-supertile requires grandparent level).
+    pub ancestry_cross_supertile: Vec<AncestryLevelResult>,
     pub distinguishing: Vec<DistinguishingResult>,
     pub info_theory: Vec<InfoTheoreticResult>,
     pub phase_transition: PhaseTransition,
@@ -400,10 +405,14 @@ pub fn analyze_system(
 
     // Ancestry analysis using seed 0
     let hierarchy = build_hierarchy(system, 0, depth);
-    let ancestry = if depth > 0 {
-        let adjacency = full_sibling_adjacency(&hierarchy, 0);
+
+    fn ancestry_results(
+        hierarchy: &FlatHierarchy,
+        adjacency: Vec<Vec<usize>>,
+        max_radius: usize,
+    ) -> Vec<AncestryLevelResult> {
         let tiles_total = hierarchy.tile_types[0].len();
-        let ancestry_radii = compute_ancestry_radii(&hierarchy, &adjacency, max_radius);
+        let ancestry_radii = compute_ancestry_radii(hierarchy, &adjacency, max_radius);
         ancestry_radii
             .iter()
             .enumerate()
@@ -433,6 +442,18 @@ pub fn analyze_system(
                 }
             })
             .collect()
+    }
+
+    let ancestry = if depth > 0 {
+        let adjacency = full_sibling_adjacency(&hierarchy, 0);
+        ancestry_results(&hierarchy, adjacency, max_radius)
+    } else {
+        Vec::new()
+    };
+
+    let ancestry_cross_supertile = if depth >= 2 {
+        let adjacency = cross_supertile_adjacency(system, &hierarchy, 0);
+        ancestry_results(&hierarchy, adjacency, max_radius)
     } else {
         Vec::new()
     };
@@ -457,6 +478,7 @@ pub fn analyze_system(
         seed_count: num_seeds,
         tiles_per_seed,
         ancestry,
+        ancestry_cross_supertile,
         distinguishing,
         info_theory,
         phase_transition,
@@ -474,9 +496,9 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
         info!("  {} seed: {} base tiles", system.type_name(i), count);
     }
 
-    // Ancestry
+    // Ancestry: full sibling adjacency
     info!(
-        "\n--- Multi-level ancestry determination (seed {}) ---",
+        "\n--- Multi-level ancestry determination: full sibling adjacency (seed {}) ---",
         system.type_name(0)
     );
     for ar in &analysis.ancestry {
@@ -485,17 +507,57 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
         } else {
             0.0
         };
-        let max_str = ar
-            .max_radius
-            .map_or("?".to_string(), |r| r.to_string());
-        let min_str = ar
-            .min_radius
-            .map_or("?".to_string(), |r| r.to_string());
+        let max_str = ar.max_radius.map_or("?".to_string(), |r| r.to_string());
+        let min_str = ar.min_radius.map_or("?".to_string(), |r| r.to_string());
         info!(
             "  Level {}: {}/{} determined ({:.1}%) | min_r={}, max_r={}, mean_r={:.2}",
             ar.target_level, ar.tiles_determined, ar.tiles_total, pct, min_str, max_str,
             ar.mean_radius
         );
+    }
+
+    // Ancestry: cross-supertile adjacency
+    if !analysis.ancestry_cross_supertile.is_empty() {
+        info!(
+            "\n--- Multi-level ancestry determination: cross-supertile adjacency (seed {}) ---",
+            system.type_name(0)
+        );
+        info!("  (tiles in inflation-adjacent supertiles are connected across supertile boundaries)");
+        for ar in &analysis.ancestry_cross_supertile {
+            let pct = if ar.tiles_total > 0 {
+                ar.tiles_determined as f64 / ar.tiles_total as f64 * 100.0
+            } else {
+                0.0
+            };
+            let max_str = ar.max_radius.map_or("?".to_string(), |r| r.to_string());
+            let min_str = ar.min_radius.map_or("?".to_string(), |r| r.to_string());
+            info!(
+                "  Level {}: {}/{} determined ({:.1}%) | min_r={}, max_r={}, mean_r={:.2}",
+                ar.target_level, ar.tiles_determined, ar.tiles_total, pct, min_str, max_str,
+                ar.mean_radius
+            );
+        }
+
+        // Print side-by-side comparison
+        info!("\n--- Ancestry radius comparison: sibling vs cross-supertile ---");
+        info!(
+            "  {:>7}  {:>14}  {:>14}  {:>10}",
+            "Level", "Sibling max_r", "Cross max_r", "Change"
+        );
+        for (sib, cross) in analysis.ancestry.iter().zip(analysis.ancestry_cross_supertile.iter()) {
+            let sib_str = sib.max_radius.map_or("?".to_string(), |r| r.to_string());
+            let cross_str = cross.max_radius.map_or("?".to_string(), |r| r.to_string());
+            let change = match (sib.max_radius, cross.max_radius) {
+                (Some(s), Some(c)) if c < s => format!("-{}", s - c),
+                (Some(s), Some(c)) if c == s => "same".to_string(),
+                (Some(s), Some(c)) => format!("+{}", c - s),
+                _ => "?".to_string(),
+            };
+            info!(
+                "  {:>7}  {:>14}  {:>14}  {:>10}",
+                sib.target_level, sib_str, cross_str, change
+            );
+        }
     }
 
     // Cross-seed distinguishing
