@@ -2,27 +2,75 @@
 
 Empirical results from running experiments on the hat monotile and its algebraic structure. These are things we measured, not things we read.
 
-## The Local-to-Global Gap Is All-or-Nothing
+## Deflation Is Not a One-Way Function (#5)
 
-The gap between local indistinguishability and global rigidity in hierarchical substitution tilings closes as a **sharp phase transition**, not a gradual curve. At every hierarchical radius below the depth, advantage is ~0% — no tile can determine which seed generated its tiling. At radius = depth, advantage jumps to 100% in a single step.
+The inflation/deflation asymmetry in the hat metatile substitution system does **not** constitute a computationally one-way function. Deflation is locally solvable.
 
-This is because the substitution is **recursively self-similar**: the local structure within any finite subtree is fully determined by the subtree root's type, independent of what's above it in the hierarchy. Two tiles from different seeds but with the same ancestor chain up to level k are locally indistinguishable at radius k. Only when the chain reaches the seed (radius = depth) does the difference become visible.
+### Results (hat and spectre, depth 3)
 
-The BFS-based type signature (used in one-way analysis) makes this even starker: with sibling adjacency, a tile can determine its immediate parent type at radius 1, but **cannot determine any higher ancestor** regardless of radius. The adjacency graph is disconnected at supertile boundaries, creating an absolute information barrier. The only way to see past this barrier is to observe the hierarchy itself — the ancestor type chain.
+| Analysis | Hat | Spectre |
+|----------|-----|---------|
+| Full sibling adjacency | All tiles determined, radius ≤ 1 | All tiles determined, radius ≤ 1 |
+| Inflation adjacency | All tiles determined, radius ≤ 4 | All tiles determined, radius ≤ 1 |
+| Type-bag decomposition | Always unique (det(M) = -1) | Always unique (det(M) = 1) |
+| Greedy deflation | 100% assignment rate | 100% assignment rate |
 
-This means the local-to-global gap is **information-theoretic, not computational**. It's not that determining the seed is *hard* — it's that the information simply isn't present in any finite local neighborhood of the base tiling. The gap closes the instant you can see the seed, and not one step sooner.
+The asymmetry between inflation (O(n) local rule application) and deflation (recovering supertile boundaries) is **implementation convenience, not computational hardness**. A radius-1 neighborhood in the full sibling adjacency graph suffices to determine parent assignments for every tile.
 
-## Mutual Information Reveals Partial Structure Before the Gap Closes
+The hat's inflation adjacency graph requires radius 4 because H-supertiles are disconnected in this sparser graph — some children lack intra-supertile neighbors. But this is an artifact of the graph choice, not an inherent barrier. The spectre, with its simpler 2-type system, resolves everything at radius 1 even with inflation adjacency.
 
-While the distinguishing advantage (fraction of tiles with seed-unique signatures) is 0 for all radii below depth, the **mutual information** between seed and signature is nonzero starting at radius 1-2. This is because the *distribution* of tiles across signatures varies by seed, even when no individual signature is unique.
+## The Local-to-Global Gap Is All-or-Nothing (#6)
 
-For example, in the hat system at depth 3: seeing grandparent type T rules out P-seed and F-seed (they don't produce T-type level-2 tiles at that depth), concentrating probability on H-seed and T-seed. This partial information shows up as positive mutual information even though no tile can deterministically identify its seed.
+The gap between local indistinguishability and global rigidity in hierarchical substitution tilings closes as a **sharp phase transition**, not a gradual curve.
 
-The gap between "zero advantage" and "positive mutual information" is the difference between **deterministic** and **probabilistic** distinguishability. A Bayesian observer gains information before the gap closes; a deterministic algorithm cannot.
+### Distinguishing advantage by radius (hat and spectre, depth 3)
 
-## Group Cryptography on Gamma = Z² ⋊ D₆ Is Not Viable
+| Radius | Hat Advantage | Spectre Advantage | Hat Normalized MI |
+|--------|--------------|-------------------|-------------------|
+| 0 | 0.0% | 0.0% | 0.000 |
+| 1 | 0.0% | 0.0% | 0.001 |
+| 2 | 1.0% | 0.0% | 0.055 |
+| 3 (=depth) | **100.0%** | **100.0%** | **1.000** |
 
-We tested three candidate hard problems for the Cucaracha's Coxeter group Gamma, motivated by the question of whether the tiling constraint could inject hardness into an otherwise tractable group (Issue #8).
+At every radius below depth, advantage is ~0%. At radius = depth, it jumps to 100% in a single step. Both hat and spectre exhibit identical transition behavior.
+
+### Why the transition is sharp
+
+The substitution is **recursively self-similar**: the local structure within any finite subtree is fully determined by the subtree root's type, independent of what's above it in the hierarchy. Two tiles from different seeds but with the same ancestor chain up to level k are locally indistinguishable at radius k. Only when the chain reaches the seed does the difference become visible.
+
+The BFS-based type signature makes this even starker: with sibling adjacency, a tile can determine its immediate parent type at radius 1, but **cannot determine any higher ancestor** regardless of radius. The adjacency graph is disconnected at supertile boundaries, creating an absolute information barrier.
+
+### Ancestry determination (hat, depth 3, seed H)
+
+| Level | Relation | Determined | Fraction |
+|-------|----------|------------|----------|
+| 1 | Parent | 442/442 | 100% at radius 1 |
+| 2 | Grandparent | 3/442 | 0.7% — nearly all undetermined |
+| 3 | Seed | 442/442 | 100% (trivially, only one seed type) |
+
+This demonstrates the BFS information barrier: sibling adjacency reveals parent type but nothing higher.
+
+### Mutual information reveals partial structure
+
+While distinguishing advantage is 0 for radii < depth, **mutual information** is nonzero starting at radius 1-2. The *distribution* of tiles across signatures varies by seed even when no individual signature is unique. A Bayesian observer gains partial information before the gap closes; a deterministic algorithm cannot.
+
+### Connection to proximity gaps
+
+The tiling gap is **dual** to the proximity gap in FRI/coding theory:
+- **Proximity gap**: globally invalid → locally detectable (local tests are powerful)
+- **Tiling gap**: globally different → locally undetectable until threshold (local observations are weak)
+
+Both exhibit sharp transitions. The proximity gap makes the IOP verifier efficient; the tiling gap characterizes the cost of identification.
+
+### Implications
+
+The gap is **not suitable as a smooth hardness assumption** like LWE. It's a binary property: either you can see the seed (trivially easy) or you can't (information-theoretically impossible). More like a one-time pad than a lattice problem — unconditional but non-tunable.
+
+For the IOP construction, this is ideal: the hierarchical commitment is unconditionally binding within any finite radius, and efficiency comes from the proximity gap on the proof side.
+
+## Group Cryptography on Gamma = Z² ⋊ D₆ Is Not Viable (#8)
+
+We tested three candidate hard problems for the Cucaracha's Coxeter group Gamma, motivated by the question of whether the tiling constraint could inject hardness into an otherwise tractable group.
 
 ### Cotiler Recovery
 
