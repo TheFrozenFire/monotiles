@@ -1043,3 +1043,62 @@ Even for spectre — where individual ancestor levels provide zero information �
 - **Partial ancestry is not worthless**: even though grandparent type alone is random noise for base prediction, combining grandparent with parent provides a strong constraint on compatible inflation paths.
 - **Tree-path context is the right query**: a tiling IOP that queries a ROOT→LEAF path carries more information per query than one that queries unrelated ancestor levels independently.
 - **Hat vs Spectre**: hat has larger absolute MI values because its stationary distribution is more uniform (higher base entropy). Spectre's concentration at Spectre=87.3% means there's little entropy to reduce in the first place.
+
+## Sparse Merkle Tree Commitment: Compact Key Has ~5-7 Hash Overhead, Enables Non-Membership Proofs (#37)
+
+A sparse Merkle tree (SMT) uses the leaf's key (here: tile coordinates) to determine its path through the tree. This enables *non-membership proofs*: proving that no tile exists at a given position. A standard dense Merkle tree commits to tiles by index and cannot make this statement.
+
+Experiment: `cargo run --release -- sparse-iop --max-depth 5 --queries 8` (hat, `--system spectre` for spectre).
+
+### Path length comparison: dense vs SMT at the base level
+
+**Hat system**, base tile counts and path lengths at each depth:
+
+| Depth | Base tiles | log₂(N) | Dense path | SMT-compact | Overhead | SMT-Coxeter | SMT-SHA256 |
+|-------|-----------|---------|------------|-------------|----------|-------------|------------|
+| 1     | 10        | 3.32    | 4          | 10          | +6       | 132         | 256        |
+| 2     | 64        | 6.00    | 6          | 12          | +6       | 132         | 256        |
+| 3     | 442       | 8.79    | 9          | 16          | +7       | 132         | 256        |
+| 4     | 3,025     | 11.56   | 12         | 18          | +6       | 132         | 256        |
+| 5     | 20,737    | 14.34   | 15         | 20          | +5       | 132         | 256        |
+
+All figures in hashes per opening. **SMT-compact** = compact coordinate key: 2 × ceil(1 + D × log₂(φ²)) + 4 bits (x + y + rotation:3b + reflected:1b). **SMT-Coxeter** = raw tx(64b) + ty(64b) + rotation(3b) + reflected(1b) = 132-bit fixed key. **SMT-SHA256** = hash of the CoxeterElement = 256-bit opaque key.
+
+### Proof size impact (8 queries, base-level tree replaced with SMT)
+
+| Depth | Dense KB | SMT-compact KB | SMT-Coxeter KB | SMT-SHA256 KB |
+|-------|----------|---------------|---------------|--------------|
+| 1     | 7.6      | 16.6          | 199.6         | 385.6        |
+| 2     | 21.1     | 30.1          | 210.1         | 396.1        |
+| 3     | 45.1     | 55.6          | 229.6         | 415.6        |
+| 4     | 78.2     | 87.2          | 258.2         | 444.2        |
+| 5     | 120.2    | 127.7         | 295.7         | 481.7        |
+
+### Crossover analysis
+
+Dense path grows at ≈ D × log₂(λ) ≈ 2.87D hashes (λ ≈ 7.30 growth rate per level).
+SMT compact path grows at ≈ 2.78D + 6 hashes (coordinate range ≈ φ^(2D) per axis).
+
+- **SMT compact vs dense**: overhead ≈ constant 5–7 hashes across depths 1–5. Dense grows at 2.87/depth, compact at 2.78/depth; the rates are nearly identical so the overhead is approximately constant.
+- **SMT Coxeter (132 bits) vs dense**: crossover at depth > 46 (impractical). At D=5: +117 overhead.
+- **SMT SHA-256 (256 bits) vs dense**: crossover at depth > 89 (very impractical). At D=5: +241 overhead.
+
+**Spectre** shows identical compact-path results (also +5 at D=5, 30,744 base tiles) with slightly faster dense path growth (λ ≈ 7.90, crossover for Coxeter at depth > 44).
+
+### Non-membership proofs: the unique SMT capability
+
+Dense Merkle trees cannot prove that a position is unoccupied. An SMT with tile coordinates as keys enables:
+
+1. **`prove_empty(pos)`** → sibling path showing the leaf at `pos` is nil. Cost: O(key_bits) hashes — same as a membership proof.
+2. **Gap-free coverage**: prover commits ALL tiles. Verifier samples random positions and demands membership or empty proofs. A prover that omits a tile cannot forge a valid empty proof for the omitted position.
+3. **Tile uniqueness**: SMT structure enforces injectivity — two tiles cannot share a key.
+4. **Boundary checking**: prove no tile key falls outside a claimed region.
+
+These guarantees are impossible with a dense Merkle tree over a tile index list.
+
+### Conclusions
+
+- Compact coordinate keys are the only viable SMT option for tiling IOPs (practical depths 1–10).
+- The overhead is small (~5–7 hashes) and approximately constant across depths — both path lengths grow linearly at nearly the same rate.
+- The Coxeter (132-bit) or SHA-256 (256-bit) fixed-width keys have crossover depths of 44+ and 86+ respectively, both impractical for this problem.
+- The practical question (#37) is not proof size: it is whether non-membership proofs are needed. If gap-free coverage checking is a requirement, compact-key SMT is the right data structure with modest proof overhead.

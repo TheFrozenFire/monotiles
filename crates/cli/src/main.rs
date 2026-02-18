@@ -222,6 +222,19 @@ enum Commands {
         #[arg(short = 'S', long, default_value = "hat")]
         system: String,
     },
+
+    /// Analyze sparse Merkle tree commitment vs dense Merkle for the tiling IOP (#37)
+    SparseIop {
+        /// Maximum hierarchy depth to analyze (1..=max_depth)
+        #[arg(short, long, default_value_t = 5)]
+        max_depth: usize,
+        /// Number of IOP queries per proof
+        #[arg(short, long, default_value_t = 8)]
+        queries: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -251,6 +264,7 @@ fn main() -> Result<()> {
         Commands::ProofSizeScaling { max_depth, queries, system } => cmd_proof_size_scaling(max_depth, queries, &system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
         Commands::GeometricIop { max_depth, queries, system } => cmd_geometric_iop(max_depth, queries, &system),
+        Commands::SparseIop { max_depth, queries, system } => cmd_sparse_iop(max_depth, queries, &system),
     }
 }
 
@@ -1622,6 +1636,194 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
     );
     info!("Achieved by: position is leaf KEY (not parallel tree). Same path length. +24 bytes/opening.");
     info!("Naive parallel-tree approach would cost ~97%. Position-as-key costs ~7%.");
+
+    Ok(())
+}
+
+fn cmd_sparse_iop(max_depth: usize, num_queries: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("sparse_iop", max_depth, queries = num_queries, system = system_name).entered();
+    use tiling::oneway::build_hierarchy;
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    info!("=== Sparse Merkle Tree IOP Analysis (#37) ===");
+    info!("System: {}, queries={}\n", system.name(), num_queries);
+
+    // Encoding costs (in bits per field)
+    // CoxeterElement: tx:i64 (64) + ty:i64 (64) + rotation:u8 (3 actual) + reflected:bool (1) = 132
+    const HASH_BYTES: usize = 32;
+    const FIELD_EL_BYTES: usize = 32;
+    const COXETER_BITS: usize = 132; // tx(64) + ty(64) + rotation(3) + reflected(1)
+    const HASH_KEY_BITS: usize = 256; // SHA-256 of CoxeterElement → fixed-width opaque key
+
+    // log2(φ²) — each inflation step scales coordinates by φ² (geometric spreading)
+    // φ = (1+√5)/2 ≈ 1.618, φ² ≈ 2.618, log2(φ²) ≈ 1.388
+    let phi_sq_log2: f64 = ((1.0f64 + 5.0f64.sqrt()) / 2.0).log2() * 2.0; // ≈ 1.388
+
+    // ── 1. Base tile counts at each depth ──────────────────────────────────
+    info!("--- Base tile counts ---");
+    info!("{:>5}  {:>10}  {:>8}", "Depth", "Tiles", "log2(N)");
+    info!("{}", "-".repeat(28));
+
+    let mut tile_counts: Vec<usize> = Vec::new();
+    for depth in 1..=max_depth {
+        let hierarchy = build_hierarchy(&*system, 0, depth);
+        let n = hierarchy.tile_types[0].len();
+        tile_counts.push(n);
+        info!("{:>5}  {:>10}  {:>8.2}", depth, n, (n as f64).log2());
+    }
+
+    // Helper: dense Merkle path length for a tree with n leaves
+    let dense_path = |n: usize| -> usize {
+        if n <= 1 { return 0; }
+        (n as f64).log2().ceil() as usize
+    };
+
+    // Helper: SMT compact path length at a given depth
+    // At depth D, coordinate range ≈ ±(φ²)^D.
+    // Signed integer in [-R, R] needs ceil(log2(2R+1)) ≈ ceil(1 + D*log2(φ²)) bits.
+    let compact_path = |depth: usize| -> usize {
+        let bits_per_axis = (1.0 + depth as f64 * phi_sq_log2).ceil() as usize;
+        2 * bits_per_axis + 3 + 1 // x + y + rotation(3b) + reflected(1b)
+    };
+
+    // ── 2. Merkle path length comparison ───────────────────────────────────
+    info!("\n--- Merkle path length at base level (hashes per opening) ---");
+    info!(
+        "{:>5}  {:>6}  {:>13}  {:>14}  {:>13}  {:>7}",
+        "Depth", "Dense", "SMT-compact", "SMT-Coxeter", "SMT-SHA256", "compact"
+    );
+    info!(
+        "{:>5}  {:>6}  {:>13}  {:>14}  {:>13}  {:>7}",
+        "", "path", "path", "path(132b)", "path(256b)", "vs dense"
+    );
+    info!("{}", "-".repeat(65));
+
+    for (i, depth) in (1..=max_depth).enumerate() {
+        let n = tile_counts[i];
+        let dp = dense_path(n);
+        let cp = compact_path(depth);
+        let coxeter = COXETER_BITS;
+        let hash_key = HASH_KEY_BITS;
+        let overhead: i64 = cp as i64 - dp as i64;
+        info!(
+            "{:>5}  {:>6}  {:>13}  {:>14}  {:>13}  {:>+7}",
+            depth, dp, cp, coxeter, hash_key, overhead
+        );
+    }
+
+    // ── 3. Proof size impact: replacing the base-level tree with SMT ───────
+    //
+    // In the IOP, each round r opens a supertile at level (depth-r) plus its
+    // children one level lower.  The base-level (level 0) tree is hit only in
+    // the deepest round.  An SMT would replace only that level-0 tree.
+    info!("\n--- Proof size if base-level tree is replaced with SMT ({} queries) ---", num_queries);
+    let avg_children = system
+        .composition()
+        .iter()
+        .map(|c| c.iter().sum::<usize>())
+        .sum::<usize>() as f64
+        / system.num_types() as f64;
+    let openings_per_deepest_round = 1 + avg_children as usize;
+
+    info!(
+        "{:>5}  {:>9}  {:>12}  {:>15}  {:>14}",
+        "Depth", "Dense KB", "SMT-cmpct KB", "SMT-Coxeter KB", "SMT-SHA256 KB"
+    );
+    info!("{}", "-".repeat(62));
+
+    for (i, depth) in (1..=max_depth).enumerate() {
+        let n = tile_counts[i];
+        let dp = dense_path(n);
+        let cp = compact_path(depth);
+
+        // Overhead per opening = (smt_path - dense_path) * HASH_BYTES bytes
+        // The deepest round is the only one using base-level openings.
+        let extra_bytes = |smt_path: usize| -> usize {
+            if smt_path <= dp { return 0; }
+            num_queries * openings_per_deepest_round * (smt_path - dp) * HASH_BYTES
+        };
+
+        // Baseline proof size (rough): commit + query phases
+        let commit_bytes = (depth + 1) * HASH_BYTES;
+        let base_query_bytes = num_queries * depth * openings_per_deepest_round
+            * (FIELD_EL_BYTES + dp * HASH_BYTES);
+        let dense_total = commit_bytes + base_query_bytes;
+
+        let compact_total = dense_total + extra_bytes(cp);
+        let coxeter_total = dense_total + extra_bytes(COXETER_BITS);
+        let sha256_total = dense_total + extra_bytes(HASH_KEY_BITS);
+
+        info!(
+            "{:>5}  {:>9.1}  {:>12.1}  {:>15.1}  {:>14.1}",
+            depth,
+            dense_total as f64 / 1024.0,
+            compact_total as f64 / 1024.0,
+            coxeter_total as f64 / 1024.0,
+            sha256_total as f64 / 1024.0,
+        );
+    }
+
+    // ── 4. Crossover analysis ───────────────────────────────────────────────
+    info!("\n--- Crossover analysis ---");
+    info!(
+        "Dense path ≈ D × log2(λ) ≈ D × {:.2} hashes  (λ=growth rate ≈ {:.2})",
+        (tile_counts.last().copied().unwrap_or(1) as f64).log2() / max_depth as f64,
+        (tile_counts.last().copied().unwrap_or(1) as f64)
+            .powf(1.0 / max_depth as f64)
+    );
+    info!(
+        "SMT compact path ≈ 2×(1+{:.3}D)+4 ≈ {:.2}D+6 hashes (overhead ≈ constant ~{} hashes)",
+        phi_sq_log2,
+        2.0 * phi_sq_log2,
+        compact_path(max_depth) as i64 - dense_path(*tile_counts.last().unwrap_or(&1)) as i64
+    );
+    let dense_per_depth = (tile_counts.last().copied().unwrap_or(1) as f64).log2()
+        / max_depth as f64;
+    let coxeter_crossover = COXETER_BITS as f64 / dense_per_depth;
+    let sha256_crossover = HASH_KEY_BITS as f64 / dense_per_depth;
+    info!(
+        "SMT Coxeter key ({} bits): beats dense only at depth > {:.0} (impractical)",
+        COXETER_BITS, coxeter_crossover
+    );
+    info!(
+        "SMT SHA-256 key ({} bits): beats dense only at depth > {:.0} (very impractical)",
+        HASH_KEY_BITS, sha256_crossover
+    );
+    info!("→ For practical depths (1-10), compact coordinate key is the only viable SMT option.");
+
+    // ── 5. Non-membership proofs ────────────────────────────────────────────
+    info!("\n--- Non-membership proofs: the unique SMT capability ---");
+    info!("Dense Merkle trees cannot prove absence: there is no \"no tile here\" leaf.");
+    info!("An SMT with tile coordinates as keys enables:");
+    info!("  prove_empty(pos) → sibling path showing the leaf at pos is nil");
+    info!("  This is O(key_bits) hashes — same cost as a membership proof.");
+    info!("");
+    info!("Applications for the tiling IOP:");
+    info!("  1. Gap-free coverage: prover commits to ALL tiles in the SMT.");
+    info!("     Verifier samples random positions and demands proofs (present or absent).");
+    info!("     A prover that omits any tile cannot forge a valid empty proof elsewhere.");
+    info!("  2. Tile uniqueness: two tiles cannot share a key (SMT enforces injectivity).");
+    info!("  3. Boundary checking: prove no tile extends outside a claimed region.");
+    info!("");
+    info!("These guarantees are impossible with a dense Merkle tree over an index list.");
+
+    // ── 6. Summary ──────────────────────────────────────────────────────────
+    info!("\n=== SUMMARY ===");
+    let final_n = *tile_counts.last().unwrap_or(&1);
+    let final_dense = dense_path(final_n);
+    let final_compact = compact_path(max_depth);
+    let final_overhead = final_compact as i64 - final_dense as i64;
+    info!("At depth {}:", max_depth);
+    info!("  Base tiles:        {}", final_n);
+    info!("  Dense path:        {} hashes", final_dense);
+    info!("  SMT compact path:  {} hashes ({:+} overhead, approximately constant across depths)", final_compact, final_overhead);
+    info!("  SMT Coxeter path:  {} hashes ({:+} overhead)", COXETER_BITS, COXETER_BITS as i64 - final_dense as i64);
+    info!("  SMT SHA-256 path:  {} hashes ({:+} overhead)", HASH_KEY_BITS, HASH_KEY_BITS as i64 - final_dense as i64);
+    info!("");
+    info!("Recommendation: compact coordinate key (2 × coord_bits + 4) if non-membership is needed.");
+    info!("  - Small overhead (~{} hashes at depth {}) that grows slowly (both paths grow ~linearly).", final_overhead, max_depth);
+    info!("  - Enables gap-free coverage and tile-uniqueness proofs.");
+    info!("  - Coxeter or SHA-256 keys are never practical for tiling IOPs.");
 
     Ok(())
 }
