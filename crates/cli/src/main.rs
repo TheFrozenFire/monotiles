@@ -84,6 +84,16 @@ enum Commands {
         #[arg(short = 'r', long, default_value_t = 5)]
         max_radius: usize,
     },
+
+    /// Analyze recoverability vulnerability (per-position criticality, erasure thresholds)
+    Vulnerability {
+        /// Hierarchy depth (substitution levels)
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        /// Number of erasure trials per fraction
+        #[arg(short, long, default_value_t = 100)]
+        erasure_trials: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -102,6 +112,7 @@ fn main() -> Result<()> {
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
         Commands::Oneway { seed, depth, max_radius } => cmd_oneway(&seed, depth, max_radius),
+        Commands::Vulnerability { depth, erasure_trials } => cmd_vulnerability(depth, erasure_trials),
     }
 }
 
@@ -608,6 +619,24 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize) -> Result<()> {
             max_full_radius
         );
     }
+
+    Ok(())
+}
+
+fn cmd_vulnerability(depth: usize, erasure_trials: usize) -> Result<()> {
+    use std::time::Instant;
+
+    println!(
+        "Vulnerability analysis: depth={}, erasure_trials={}\n",
+        depth, erasure_trials
+    );
+
+    let t0 = Instant::now();
+    let analysis = tiling::vulnerability::analyze(depth, erasure_trials);
+    let elapsed = t0.elapsed();
+
+    tiling::vulnerability::print_report(&analysis);
+    println!("\nCompleted in {:?}", elapsed);
 
     Ok(())
 }

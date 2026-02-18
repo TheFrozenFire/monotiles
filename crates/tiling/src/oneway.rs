@@ -207,9 +207,9 @@ pub fn neighborhood(adjacency: &[Vec<usize>], tile: usize, radius: usize) -> Has
 /// Captures the local structure around a tile as seen through the adjacency graph.
 /// Two tiles with identical type signatures have indistinguishable local neighborhoods
 /// (up to the given radius) when only tile types are observable.
-type TypeSignature = Vec<(usize, [usize; 4])>;
+pub(crate) type TypeSignature = Vec<(usize, [usize; 4])>;
 
-fn type_signature(
+pub(crate) fn type_signature(
     hierarchy: &FlatHierarchy,
     adjacency: &[Vec<usize>],
     level: usize,
