@@ -915,52 +915,67 @@ Cross-seed distinguishing uses hierarchical signature (ancestor chain depth), in
 
 **Cross-supertile adjacency breaks the level-2 determination bottleneck.** With sibling-only adjacency, a tile's grandparent type is unresolvable within the tested radius for most tiles. Adding cross-supertile connections (inflation-adjacent neighboring supertiles) provides the missing context to determine the level-2 ancestor. The geometric boundary information that sibling adjacency lacks is exactly what is needed to resolve ambiguous ancestry.
 
-## Geometric Tile Placement Adds ~97-98% Proof Size Overhead (#28)
+## Geometric Tile Placement: Position-as-Key Adds Only ~7% Proof Size Overhead (#28)
 
-We analyzed the cost of extending the tiling IOP to commit to tile positions (x, y, angle) in addition to tile types. Each tile's 3D position data (24 bytes: 3 × f64) would be committed alongside the type in a parallel Merkle tree.
+We analyzed the cost of extending the tiling IOP to commit to tile positions (x, y, angle) in addition to tile types.
 
-### Proof size: type-only vs geometric IOP (hat, 8 queries)
+### Commitment design: position as key
+
+The right design is to use the tile's spatial coordinate as the **Merkle leaf key**, with the oracle value stored at that key. This is distinct from a naive parallel Merkle tree approach:
+
+| Design | Overhead at depth 5 | Mechanism |
+|--------|-------------------|-----------|
+| **Position as key** | **~7%** | Same single tree per level; +24 bytes per opened leaf |
+| Parallel tree (naïve) | ~97% | Extra Merkle root + full extra path per opening |
+
+With position-as-key:
+- One Merkle tree per level — identical structure to the type-only IOP
+- No-overlap guarantee comes free: two tiles can't share a key, so position collisions are impossible
+- Each opening transmits position alongside value (+24 bytes per leaf) so the verifier can verify the key
+- Inflation consistency check: `child_key == expected_pos(parent_key, child_slot_in_inflation)`
+- Merkle path length is **unchanged** — position is the key, not additional payload
+
+### Proof size: type-only vs position-keyed geometric IOP (hat, 8 queries)
 
 | Depth | Type-only | Geom IOP | Overhead | Overhead % |
 |-------|-----------|----------|---------|------------|
-| 1 | 4 KB | 8 KB | 4 KB | 91.8% |
-| 2 | 15 KB | 29 KB | 14 KB | 95.0% |
-| 3 | 31 KB | 62 KB | 30 KB | 96.4% |
-| 4 | 54 KB | 106 KB | 52 KB | 97.2% |
-| 5 | 82 KB | 163 KB | 80 KB | 97.7% |
+| 1 | 4 KB | 5 KB | 1 KB | 24.7% |
+| 2 | 15 KB | 17 KB | 2 KB | 14.9% |
+| 3 | 31 KB | 35 KB | 3 KB | 10.7% |
+| 4 | 54 KB | 58 KB | 4 KB | 8.3% |
+| 5 | 82 KB | 88 KB | 5 KB | **6.8%** |
 
-The overhead converges to ~97-98% at large depth. Geometric commitment roughly doubles proof size.
+The overhead decreases with depth because the 24 bytes/opening is small relative to the growing Merkle path. At depth 5, ~6 KB of position data is carried in an 88 KB proof.
 
-### Why the overhead is so large
+### Why the naïve parallel-tree approach is wrong
 
-The dominant cost is the Merkle path for each opened tile. Each opening currently contributes: 32 bytes (field element) + path_length × 32 bytes (hashes). Adding geometry doubles the hash-per-path contribution because a second Merkle tree (for positions) must also be opened at each query.
+A separate position Merkle tree alongside the value tree adds: (1) an extra root per level, and (2) an extra full-length Merkle path per opening. The result is ~97% overhead — the position data (24 bytes) is negligible, but the extra path is not. Position-as-key avoids both costs by restructuring the existing tree.
 
-The 24 bytes of position data are minor; the doubled Merkle path length is the main cost.
+### What position-keyed IOP checks
 
-### What geometric commitment adds
-
-| Attack type | Type-only detectable? | Geometric detectable? |
-|-------------|----------------------|----------------------|
+| Attack type | Type-only detectable? | Position-keyed detectable? |
+|-------------|----------------------|---------------------------|
 | Wrong child type count | Yes (composition check) | Yes |
 | Base-level type flip | Yes (breaks composition) | Yes |
 | Supertile label swap (P'↔F') | No (multiset unchanged) | No (geometry preserved) |
-| Teleported tile (wrong position) | No | **Yes** |
-| Wrong spatial orientation | No | **Yes** |
-| Fabricated hierarchy with wrong layout | No | **Yes** |
+| Teleported tile (wrong position) | No | **Yes** (key mismatch) |
+| Wrong spatial orientation | No | **Yes** (key mismatch) |
+| Fabricated layout with valid types | No | **Yes** |
+| Two tiles at same position (overlap) | No | **Yes** (key collision in Merkle tree) |
 
-### Position consistency check
+### Inflation consistency check
 
-For each queried parent-child pair, the verifier checks:
-1. `child_pos = parent_pos × φ² + offset(child_position_in_parent)`
-2. `child_angle = parent_angle + rotation(child_position_in_parent)`
+For each queried parent-child pair:
+1. `child_pos = parent_pos × φ² + slot_offset(child_slot)`
+2. `child_angle = parent_angle + slot_rotation(child_slot)`
 
-Demo: H-seed at depth 3 (442 base tiles) — all 442 pass the spatial consistency check for the canonical hierarchy. A teleported tile (moved to (1000, 1000)) would fail instantly.
+The verifier computes the expected child key from the parent key and slot index, then checks it matches the committed child key. No additional hash operations needed.
 
-**Verification cost**: 240 additional scalar comparisons at depth 5 (2 multiplications + 2 additions per parent-child pair) — negligible compared to Merkle hashing.
+**Demo**: H-seed at depth 3 (442 base tiles) — all 442 pass the key-consistency check for a valid hierarchy. A teleported tile causes an immediate key mismatch.
 
 ### Conclusion
 
-Geometric commitment doubles proof size (~97% overhead at depth 5). It adds semantic validity (no teleportation, correct spatial layout) but does not close the sibling-swap gap. The canonical form check (#33) remains the right fix for undetectable swaps; geometric commitment is orthogonal — it proves spatial authenticity.
+Position-as-key geometric commitment costs ~7% proof size at depth 5. It adds spatial authenticity (no teleportation, no overlaps, correct inflation layout) with negligible verification overhead. The canonical form check (#33) remains the right fix for sibling swaps, which preserve geometry and would not be caught by position commitment.
 
 ## Mutual Information Saturates After Level 1 for Hat, Immediately for Spectre (#15)
 

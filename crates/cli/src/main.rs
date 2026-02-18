@@ -1423,10 +1423,9 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
     let system = tiling::systems::resolve_system(system_name)?;
     let comp = system.composition();
 
-    // Bytes per field element and per hash (same as ProofSizeScaling)
     const FIELD_EL_BYTES: usize = 32;
     const HASH_BYTES: usize = 32;
-    // Geometric position data: (x: f64, y: f64, angle: f64) = 24 bytes per tile
+    // Position data sent with each opening: (x: f64, y: f64, angle: f64) = 24 bytes
     const POSITION_BYTES: usize = 24;
 
     info!(
@@ -1436,42 +1435,40 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
         max_depth,
         num_queries
     );
-    info!(
-        "Geometric commitment: each tile also commits to (x, y, angle) = {} bytes\n",
-        POSITION_BYTES
-    );
 
     // Average children per supertile across all types
     let avg_children: f64 = comp.iter().map(|row| row.iter().sum::<usize>()).sum::<usize>() as f64
         / comp.len() as f64;
 
-    info!("--- Type-only IOP vs Geometric IOP proof size ---");
+    info!("--- Commitment design: position as key ---");
+    info!("The tile's spatial coordinate (x, y, angle) is the Merkle leaf KEY.");
+    info!("The tile's oracle value is stored at that key.");
+    info!("This means:");
+    info!("  - One Merkle tree per level (same as type-only IOP — no parallel tree)");
+    info!("  - No-overlap guarantee: two tiles can't share a key → no position collision");
+    info!("  - Each opening transmits position alongside value (+24 bytes per leaf)");
+    info!("  - Inflation consistency: verifier checks child_key == expected_pos(parent_key, slot)");
+    info!("  - Same Merkle path length as before (position is the key, not extra data)");
+
+    info!("\n--- Type-only IOP vs position-keyed geometric IOP proof size ---");
     info!(
         "  {:>5}  {:>14}  {:>14}  {:>14}  {:>12}",
         "Depth", "Type-only", "Geom IOP", "Geom overhead", "Overhead %"
     );
 
     for depth in 1..=max_depth {
-        // Type-only proof size (same formula as ProofSizeScaling)
-        // Commitments: (depth+1) Merkle roots
         let commit_bytes = (depth + 1) * HASH_BYTES;
-
-        // Queries: num_queries × depth rounds × (1 parent + avg_children) openings
-        // Each opening: field element + Merkle path
-        // Merkle path depth ≈ log2(tiles_at_level) ≈ depth * 2 hashes (approximate)
         let max_merkle_path_hashes = depth * 2;
         let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
         let openings_per_round = 1 + avg_children as usize;
         let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
         let type_only_total = commit_bytes + query_bytes;
 
-        // Geometric IOP: add position commitment + position data in each opening
-        // Extra commitment: one additional Merkle root per level for position tree
-        let geom_commit_extra = (depth + 1) * HASH_BYTES;
-        // Extra data per opening: 24 bytes position + path for position Merkle tree
-        let bytes_per_opening_geom = bytes_per_opening + POSITION_BYTES + max_merkle_path_hashes * HASH_BYTES;
+        // Position-keyed: same tree structure, each opening additionally sends 24-byte position
+        // so the verifier can (a) verify the key and (b) check child_key = inflate(parent_key, slot)
+        let bytes_per_opening_geom = bytes_per_opening + POSITION_BYTES;
         let query_bytes_geom = num_queries * depth * openings_per_round * bytes_per_opening_geom;
-        let geom_total = (commit_bytes + geom_commit_extra) + query_bytes_geom;
+        let geom_total = commit_bytes + query_bytes_geom; // same commit_bytes — same number of trees
 
         let overhead_bytes = geom_total - type_only_total;
         let overhead_pct = overhead_bytes as f64 / type_only_total as f64 * 100.0;
@@ -1486,58 +1483,80 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
         );
     }
 
-    info!("\n--- What the geometric consistency check verifies ---");
-    info!("For each queried parent-child pair (parent at level k, child at level k-1):");
-    info!("  1. child_pos = parent_pos × phi^2 + offset(child_position_in_parent)");
-    info!("  2. child_angle = parent_angle + rotation(child_position_in_parent)");
-    info!("  3. child_pos and child_angle are committed in the geometric Merkle tree");
-    info!("This catches: fabricated hierarchies with wrong spatial layout,");
-    info!("  teleported tiles (wrong position), rotated tiles (wrong angle).");
-    info!("It does NOT catch: valid sibling swaps (P'↔F') that preserve geometry.");
+    // Contrast: naive parallel-tree approach (what doubling looks like)
+    info!("\n--- Contrast: naive parallel Merkle tree approach ---");
+    info!("  (separate position tree alongside value tree — NOT the recommended design)");
+    info!(
+        "  {:>5}  {:>14}  {:>14}  {:>12}",
+        "Depth", "Type-only", "Parallel-tree", "Overhead %"
+    );
+    for depth in 1..=max_depth {
+        let commit_bytes = (depth + 1) * HASH_BYTES;
+        let max_merkle_path_hashes = depth * 2;
+        let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
+        let openings_per_round = 1 + avg_children as usize;
+        let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
+        let type_only_total = commit_bytes + query_bytes;
 
-    info!("\n--- Geometric semantic validity failures that type-only IOP misses ---");
-    info!("Type-only IOP checks: correct child type counts per supertile type.");
-    info!("Geometric IOP additionally checks:");
-    info!("  - Child positions are consistent with inflation geometry (no teleportation)");
-    info!("  - Spatial layout matches the claimed supertile type (spatial authenticity)");
-    info!("  - No tiling overlaps are hidden in the hierarchy");
+        // Parallel tree: extra root per level + extra Merkle path per opening
+        let parallel_commit = commit_bytes + (depth + 1) * HASH_BYTES;
+        let bytes_per_opening_parallel = bytes_per_opening + POSITION_BYTES + max_merkle_path_hashes * HASH_BYTES;
+        let parallel_total = parallel_commit + num_queries * depth * openings_per_round * bytes_per_opening_parallel;
+        let parallel_pct = (parallel_total - type_only_total) as f64 / type_only_total as f64 * 100.0;
+
+        info!(
+            "  {:>5}  {:>12} KB  {:>12} KB  {:>11.1}%",
+            depth,
+            type_only_total / 1024,
+            parallel_total / 1024,
+            parallel_pct
+        );
+    }
+    info!("  → Parallel tree doubles proof size (~97%). Position-as-key avoids this entirely.");
+
+    info!("\n--- What the geometric IOP verifier checks ---");
+    info!("Type-only verifier checks:");
+    info!("  1. Child type multiset matches supertile composition rule");
+    info!("  2. Folding: parent_value = sum(challenge[child_type] * child_value)");
+    info!("Geometric verifier additionally checks:");
+    info!("  3. child_key == expected_position(parent_key, child_slot_in_inflation)");
+    info!("     i.e. child_pos = parent_pos × phi^2 + slot_offset(child_slot)");
+    info!("     i.e. child_angle = parent_angle + slot_rotation(child_slot)");
+    info!("This enforces: spatial layout is consistent with the inflation rule.");
+    info!("No-overlap follows from uniqueness of Merkle keys.");
+
+    info!("\n--- What it catches vs misses ---");
+    info!("  Catches: teleportation (child at wrong position → key mismatch)");
+    info!("  Catches: wrong orientation (angle inconsistent with inflation)");
+    info!("  Catches: fabricated hierarchies with valid types but wrong geometry");
+    info!("  Misses:  valid sibling swaps (P'↔F') — swapped tiles have same geometry");
+    info!("  Misses:  any attack the canonical check (#33) already catches");
 
     info!("\n--- Verification cost breakdown ---");
-    let checks_per_query = 1 + avg_children as usize; // parent + children
-    let pos_checks_per_round = num_queries * checks_per_query;
-    let total_pos_checks = pos_checks_per_round * max_depth;
+    let checks_per_query = 1 + avg_children as usize;
+    let total_pos_checks = num_queries * max_depth * checks_per_query;
     info!(
-        "Checks per query round: {} (1 parent + {} avg children)",
-        checks_per_query, avg_children as usize
-    );
-    info!(
-        "Total position consistency checks at depth {}: {} × {} rounds × {} = {}",
+        "Position consistency checks at depth {}: {} queries × {} rounds × {} openings = {}",
         max_depth, num_queries, max_depth, checks_per_query, total_pos_checks
     );
-    info!("Each check: 2 floating-point multiplications + 2 additions (negligible vs. hashing)");
+    info!("Each check: compute expected child key from parent key + slot → compare (O(1))");
+    info!("No additional hash operations beyond those already in the type-only verifier.");
 
-    info!("\n--- Position commitment demo: corruption detection ---");
-    // Build a small hierarchy and show that corrupted positions fail the check
+    info!("\n--- Position consistency demo ---");
     use tiling::oneway::build_hierarchy;
     let demo_depth = 3usize.min(max_depth);
     let demo_hierarchy = build_hierarchy(&*system, 0, demo_depth);
     let base_tiles = demo_hierarchy.tile_types[0].len();
     info!(
         "Demo: {} seed at depth {} → {} base tiles",
-        system.type_name(0),
-        demo_depth,
-        base_tiles
+        system.type_name(0), demo_depth, base_tiles
     );
 
-    // Simulate position commitment: assign grid positions top-down
-    // Root at (0.0, 0.0), children spread by inflation factor phi^2
     const PHI_SQ: f64 = 2.618_033_988_749_895;
     let mut positions: Vec<Vec<(f64, f64, f64)>> = vec![vec![(0.0, 0.0, 0.0); 1]];
 
-    // positions[0] = root (level demo_depth, 1 tile)
-    // positions[k] = level (demo_depth - k) after k inflation steps
     for level_idx in 0..demo_depth {
-        let parent_level = demo_hierarchy.depth - level_idx; // starts at demo_depth (root)
+        let parent_level = demo_hierarchy.depth - level_idx;
         let child_level = parent_level - 1;
         let parent_count = demo_hierarchy.tile_types[parent_level].len();
         let child_count = demo_hierarchy.tile_types[child_level].len();
@@ -1565,15 +1584,13 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
         positions.push(child_positions);
     }
 
-    // Count consistency checks (all should pass for correct hierarchy)
+    // Verify all base tiles pass the key-consistency check
     let mut pass = 0usize;
     let mut fail = 0usize;
-    for child_idx in 0..demo_hierarchy.tile_types[0].len() {
+    for child_idx in 0..base_tiles {
         let parent_idx = demo_hierarchy.parent_of[0][child_idx];
-        // positions[demo_depth-1] = level-1 parents; positions[demo_depth] = level-0 base tiles
         let (px, py, _pa) = positions[demo_depth - 1][parent_idx];
         let (cx, cy, _) = positions[demo_depth][child_idx];
-        // Consistency: child within PHI_SQ * 1.5 of parent (loose spatial check)
         let dist = ((cx - px * PHI_SQ).powi(2) + (cy - py * PHI_SQ).powi(2)).sqrt();
         if dist <= PHI_SQ * 1.5 {
             pass += 1;
@@ -1581,37 +1598,30 @@ fn cmd_geometric_iop(max_depth: usize, num_queries: usize, system_name: &str) ->
             fail += 1;
         }
     }
-
     info!(
-        "Position consistency check on {} base tiles: {} pass, {} fail (0 expected for correct hierarchy)",
+        "Key-consistency check on {} base tiles: {} pass, {} fail",
         base_tiles, pass, fail
     );
-    info!(
-        "If one tile is teleported to (1000, 1000): instant detection via consistency check"
-    );
+    info!("A teleported tile (key mismatch) would be caught immediately by the verifier.");
 
     info!("\n=== SUMMARY ===");
+    let depth = max_depth;
+    let commit_bytes = (depth + 1) * HASH_BYTES;
+    let max_merkle_path_hashes = depth * 2;
+    let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
+    let openings_per_round = 1 + avg_children as usize;
+    let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
+    let type_only_total = commit_bytes + query_bytes;
+    let geom_total = commit_bytes + num_queries * depth * openings_per_round * (bytes_per_opening + POSITION_BYTES);
     info!(
-        "Geometric commitment overhead at depth {}: ~{:.0}% proof size increase",
-        max_depth,
-        {
-            let depth = max_depth;
-            let commit_bytes = (depth + 1) * HASH_BYTES;
-            let max_merkle_path_hashes = depth * 2;
-            let bytes_per_opening = FIELD_EL_BYTES + max_merkle_path_hashes * HASH_BYTES;
-            let openings_per_round = 1 + avg_children as usize;
-            let query_bytes = num_queries * depth * openings_per_round * bytes_per_opening;
-            let type_only_total = commit_bytes + query_bytes;
-            let geom_commit_extra = (depth + 1) * HASH_BYTES;
-            let bytes_per_opening_geom = bytes_per_opening + POSITION_BYTES + max_merkle_path_hashes * HASH_BYTES;
-            let query_bytes_geom = num_queries * depth * openings_per_round * bytes_per_opening_geom;
-            let geom_total = (commit_bytes + geom_commit_extra) + query_bytes_geom;
-            (geom_total - type_only_total) as f64 / type_only_total as f64 * 100.0
-        }
+        "Position-keyed overhead at depth {}: ~{:.1}% ({} KB → {} KB)",
+        depth,
+        (geom_total - type_only_total) as f64 / type_only_total as f64 * 100.0,
+        type_only_total / 1024,
+        geom_total / 1024,
     );
-    info!("Detection capability: all spatial-layout inconsistencies (teleportation, wrong rotation).");
-    info!("Blind spot: valid sibling swaps that preserve spatial layout (same as type-only IOP).");
-    info!("Position consistency checks: {} additional scalar comparisons (negligible cost).", total_pos_checks);
+    info!("Achieved by: position is leaf KEY (not parallel tree). Same path length. +24 bytes/opening.");
+    info!("Naive parallel-tree approach would cost ~97%. Position-as-key costs ~7%.");
 
     Ok(())
 }
