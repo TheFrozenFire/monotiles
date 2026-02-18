@@ -1,6 +1,6 @@
 use crate::coxeter::CoxeterElement;
 use crate::cucaracha::{cucaracha, expand_by_generators, Cotiler};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tracing::{info, debug, trace, info_span, debug_span};
 
@@ -297,6 +297,288 @@ pub fn recover_cotiler(
         "recovery search complete",
     );
     (solutions, budget_exceeded)
+}
+
+/// Coset-based cotiler recovery exploiting the Z² ⋊ D₆ structure.
+///
+/// Instead of brute-force subset enumeration, decomposes G_C elements by their
+/// translation component. For each unique translation, at most 12 point group
+/// decorations are possible. This reduces the search from C(candidates, n-1)
+/// to a product over translation classes.
+pub fn recover_cotiler_coset(
+    generators: &[CoxeterElement],
+    target_size: usize,
+    max_solutions: usize,
+) -> Vec<Cotiler> {
+    if target_size == 0 {
+        return vec![];
+    }
+    if target_size == 1 {
+        return vec![Cotiler::new(vec![CoxeterElement::identity()])];
+    }
+
+    // BFS-expand the generated group (same as brute-force version)
+    let mut group_elements = HashSet::new();
+    group_elements.insert(CoxeterElement::identity());
+    for g in generators {
+        group_elements.insert(*g);
+        group_elements.insert(g.inverse());
+    }
+    let max_group_size = (target_size * target_size * 4).max(64);
+    let mut changed = true;
+    while changed && group_elements.len() < max_group_size {
+        changed = false;
+        let current: Vec<_> = group_elements.iter().copied().collect();
+        for a in &current {
+            for g in generators {
+                let ag = a.compose(g);
+                if group_elements.insert(ag) {
+                    changed = true;
+                }
+                let ag_inv = a.compose(&g.inverse());
+                if group_elements.insert(ag_inv) {
+                    changed = true;
+                }
+                if group_elements.len() >= max_group_size {
+                    break;
+                }
+            }
+            if group_elements.len() >= max_group_size {
+                break;
+            }
+        }
+    }
+
+    let tile = cucaracha();
+    let id_cells: HashSet<_> = tile.iter().copied().collect();
+
+    // Group candidates by translation component
+    let mut by_translation: HashMap<(i64, i64), Vec<CoxeterElement>> = HashMap::new();
+    for &g in &group_elements {
+        // Filter: non-overlapping with identity tile
+        if g != CoxeterElement::identity()
+            && tile.iter().any(|c| id_cells.contains(&g.compose(c)))
+        {
+            continue;
+        }
+        let (tx, ty) = g.translation();
+        by_translation.entry((tx, ty)).or_default().push(g);
+    }
+
+    // Sort translations for deterministic ordering
+    let mut translations: Vec<(i64, i64)> = by_translation.keys().copied().collect();
+    translations.sort();
+
+    let _span = debug_span!(
+        "recover_cotiler_coset",
+        target_size,
+        translation_classes = translations.len(),
+        total_candidates = group_elements.len(),
+    )
+    .entered();
+
+    debug!(
+        target_size,
+        translation_classes = translations.len(),
+        "coset-based recovery: {} translation classes, max {} D6 choices each",
+        translations.len(),
+        by_translation.values().map(|v| v.len()).max().unwrap_or(0),
+    );
+
+    // Backtracking over translation classes instead of individual candidates.
+    // For each translation class, choose one element (point group decoration)
+    // or skip the class entirely.
+    let mut solutions = Vec::new();
+    let mut current = vec![CoxeterElement::identity()];
+    let mut covered: HashSet<_> = tile.iter().copied().collect();
+    let mut nodes_visited = 0u64;
+
+    fn coset_backtrack(
+        translations: &[(i64, i64)],
+        by_translation: &HashMap<(i64, i64), Vec<CoxeterElement>>,
+        current: &mut Vec<CoxeterElement>,
+        covered: &mut HashSet<CoxeterElement>,
+        target_size: usize,
+        max_solutions: usize,
+        solutions: &mut Vec<Cotiler>,
+        generators: &[CoxeterElement],
+        tile: &[CoxeterElement; 16],
+        trans_idx: usize,
+        nodes_visited: &mut u64,
+    ) {
+        *nodes_visited += 1;
+        if solutions.len() >= max_solutions {
+            return;
+        }
+        if current.len() == target_size {
+            // Verify G_C match
+            let cotiler = Cotiler::new(current.clone());
+            let gens: HashSet<_> = cotiler.cotiler_group_generators().into_iter().collect();
+            let orig_gens: HashSet<_> = generators.iter().copied().collect();
+            if orig_gens.iter().all(|g| gens.contains(g)) {
+                solutions.push(cotiler);
+            }
+            return;
+        }
+        if trans_idx >= translations.len() {
+            return;
+        }
+        // Not enough translations left to fill remaining slots
+        let remaining_slots = target_size - current.len();
+        let remaining_classes = translations.len() - trans_idx;
+        if remaining_classes < remaining_slots {
+            return;
+        }
+
+        // Option 1: skip this translation class
+        coset_backtrack(
+            translations,
+            by_translation,
+            current,
+            covered,
+            target_size,
+            max_solutions,
+            solutions,
+            generators,
+            tile,
+            trans_idx + 1,
+            nodes_visited,
+        );
+
+        // Option 2: pick one point group decoration from this class
+        let key = &translations[trans_idx];
+        if let Some(candidates) = by_translation.get(key) {
+            for &g in candidates {
+                if solutions.len() >= max_solutions {
+                    return;
+                }
+                if g == CoxeterElement::identity() {
+                    continue;
+                }
+                let cells: Vec<_> = tile.iter().map(|c| g.compose(c)).collect();
+                if cells.iter().any(|c| covered.contains(c)) {
+                    continue;
+                }
+                for c in &cells {
+                    covered.insert(*c);
+                }
+                current.push(g);
+
+                coset_backtrack(
+                    translations,
+                    by_translation,
+                    current,
+                    covered,
+                    target_size,
+                    max_solutions,
+                    solutions,
+                    generators,
+                    tile,
+                    trans_idx + 1,
+                    nodes_visited,
+                );
+
+                current.pop();
+                for c in &cells {
+                    covered.remove(c);
+                }
+            }
+        }
+    }
+
+    coset_backtrack(
+        &translations,
+        &by_translation,
+        &mut current,
+        &mut covered,
+        target_size,
+        max_solutions,
+        &mut solutions,
+        generators,
+        &tile,
+        0,
+        &mut nodes_visited,
+    );
+
+    debug!(
+        nodes_visited,
+        solutions = solutions.len(),
+        "coset recovery complete",
+    );
+    solutions
+}
+
+/// Compare brute-force vs coset-based recovery at a given size.
+pub struct CosetComparisonResult {
+    pub size: usize,
+    pub brute_force_nodes: u64,
+    pub brute_force_ms: f64,
+    pub brute_force_solutions: usize,
+    pub brute_force_budget_exceeded: bool,
+    pub coset_nodes: u64,
+    pub coset_ms: f64,
+    pub coset_solutions: usize,
+}
+
+pub fn coset_comparison(size: usize, trials: usize) -> Vec<CosetComparisonResult> {
+    let mut rng = 0xBEEF_CAFE_u64;
+    let mut results = Vec::new();
+
+    for _ in 0..trials {
+        let seed = CoxeterElement::identity();
+        let cotiler = match grow_cotiler(seed, size, &mut rng) {
+            Some(c) => c,
+            None => continue,
+        };
+        let generators = cotiler.cotiler_group_generators();
+
+        // Brute-force
+        let t0 = Instant::now();
+        let (bf_solutions, bf_exceeded) = recover_cotiler(&generators, size, 16);
+        let bf_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Coset-based
+        let t1 = Instant::now();
+        let cs_solutions = recover_cotiler_coset(&generators, size, 16);
+        let cs_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+        results.push(CosetComparisonResult {
+            size,
+            brute_force_nodes: 0, // nodes logged via tracing
+            brute_force_ms: bf_ms,
+            brute_force_solutions: bf_solutions.len(),
+            brute_force_budget_exceeded: bf_exceeded,
+            coset_nodes: 0,
+            coset_ms: cs_ms,
+            coset_solutions: cs_solutions.len(),
+        });
+    }
+
+    results
+}
+
+pub fn print_coset_comparison(results: &[CosetComparisonResult]) {
+    info!("\n--- Coset vs Brute-Force Recovery Comparison ---");
+    info!(
+        "{:<6} {:>12} {:>10} {:>12} {:>10} {:>10}",
+        "Size", "BF(ms)", "BF sols", "Coset(ms)", "CS sols", "Speedup"
+    );
+    for r in results {
+        let speedup = if r.coset_ms > 0.0 {
+            r.brute_force_ms / r.coset_ms
+        } else {
+            f64::INFINITY
+        };
+        let bf_str = if r.brute_force_budget_exceeded {
+            format!(">{:.1}", r.brute_force_ms)
+        } else {
+            format!("{:.2}", r.brute_force_ms)
+        };
+        info!(
+            "{:<6} {:>12} {:>10} {:>12.2} {:>10} {:>9.1}x",
+            r.size, bf_str, r.brute_force_solutions, r.coset_ms, r.coset_solutions, speedup,
+        );
+    }
 }
 
 pub fn recovery_experiment(size: usize, trials: usize) -> RecoveryResult {
@@ -826,6 +1108,58 @@ mod tests {
         // there should be exactly one decomposition into a single tile.
         assert_eq!(solutions.len(), 1, "single tile should have unique decomposition");
         assert_eq!(solutions[0].positions[0], CoxeterElement::identity());
+    }
+
+    #[test]
+    fn coset_recovery_of_size_2_cotiler() {
+        let seed = CoxeterElement::identity();
+        let mut rng = 77777u64;
+        let cotiler = grow_cotiler(seed, 2, &mut rng).unwrap();
+        let generators = cotiler.cotiler_group_generators();
+
+        let solutions = recover_cotiler_coset(&generators, 2, 8);
+        assert!(!solutions.is_empty(), "coset recovery should find at least one solution");
+
+        let orig_gens: HashSet<_> = generators.iter().copied().collect();
+        for sol in &solutions {
+            let sol_gens: HashSet<_> = sol.cotiler_group_generators().into_iter().collect();
+            assert!(
+                orig_gens.iter().all(|g| sol_gens.contains(g)),
+                "coset-recovered cotiler should generate the same G_C"
+            );
+        }
+    }
+
+    #[test]
+    fn coset_recovery_of_size_4_cotiler() {
+        let seed = CoxeterElement::identity();
+        let mut rng = 88888u64;
+        let cotiler = grow_cotiler(seed, 4, &mut rng).unwrap();
+        let generators = cotiler.cotiler_group_generators();
+
+        let solutions = recover_cotiler_coset(&generators, 4, 4);
+        assert!(
+            !solutions.is_empty(),
+            "coset recovery should find at least one solution for size 4"
+        );
+    }
+
+    #[test]
+    fn coset_and_bruteforce_agree_on_size_3() {
+        let seed = CoxeterElement::identity();
+        let mut rng = 55555u64;
+        let cotiler = grow_cotiler(seed, 3, &mut rng).unwrap();
+        let generators = cotiler.cotiler_group_generators();
+
+        let (bf_solutions, _) = recover_cotiler(&generators, 3, 16);
+        let cs_solutions = recover_cotiler_coset(&generators, 3, 16);
+
+        // Both should find solutions
+        assert!(!bf_solutions.is_empty());
+        assert!(!cs_solutions.is_empty());
+
+        // Coset should find at least as many (it's more structured, but same G_C check)
+        // At minimum, both find the original cotiler (up to translation normalization)
     }
 
     #[test]

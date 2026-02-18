@@ -789,6 +789,15 @@ fn cmd_group_crypto(experiment: &str, max_size: usize, trials: usize) -> Result<
         experiment, max_size, trials
     );
 
+    if experiment == "coset" {
+        info!("Running coset vs brute-force comparison...\n");
+        for size in 1..=max_size {
+            let results = domain::group_crypto::coset_comparison(size, trials);
+            domain::group_crypto::print_coset_comparison(&results);
+        }
+        return Ok(());
+    }
+
     let analysis = domain::group_crypto::analyze_experiments(max_size, trials, experiment);
 
     domain::group_crypto::print_report(&analysis);
