@@ -121,6 +121,16 @@ enum Commands {
         system: String,
     },
 
+    /// Measure minimum modification distance (detecting-code strength)
+    ModificationDistance {
+        /// Hierarchy depth (substitution levels)
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Explore Cucaracha-based group cryptography problems
     GroupCrypto {
         /// Experiment to run: all, recovery, decomposition, stabilizer
@@ -153,6 +163,7 @@ fn main() -> Result<()> {
         Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
         Commands::Gap { depth, max_radius, system } => cmd_gap(depth, max_radius, &system),
         Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
+        Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
     }
 }
@@ -741,6 +752,28 @@ fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> 
     let elapsed = t0.elapsed();
 
     tiling::vulnerability::print_report(&*system, &analysis);
+    debug!("\nCompleted in {:?}", elapsed);
+
+    Ok(())
+}
+
+fn cmd_modification_distance(depth: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("modification_distance", depth, system = system_name).entered();
+    use std::time::Instant;
+
+    let system = tiling::systems::resolve_system(system_name)?;
+
+    info!(
+        "Modification distance analysis: system={}, depth={}\n",
+        system.name(),
+        depth,
+    );
+
+    let t0 = Instant::now();
+    let analysis = tiling::vulnerability::analyze_modification_distance(&*system, 0, depth);
+    let elapsed = t0.elapsed();
+
+    tiling::vulnerability::print_modification_report(&*system, &analysis);
     debug!("\nCompleted in {:?}", elapsed);
 
     Ok(())

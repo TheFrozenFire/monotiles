@@ -363,3 +363,53 @@ Neither of these depends on tiling structure. The confusability of supertile typ
 **Where tiling structure would matter.** If the IOP were extended to prove *semantic validity* — that the committed hierarchy is actually a valid tiling (correct tile shapes, consistent adjacencies, chirality constraints) — then spectre's no-reflection constraint and anchor-free uniformity would become relevant. Spectre's geometric rigidity (no reflected tiles) means there is one fewer degree of freedom for a cheating prover to exploit when constructing a semantically plausible fake hierarchy. Hat's chirality freedom provides the prover with local choices that do not violate the algebraic folding check but do violate geometric tiling validity.
 
 This is an open direction: building an IOP that also commits to the *geometric* placement of tiles, not just their field values, and where spectre's rigidity provides measurable soundness improvement.
+
+## Minimum Modification Distance (#26)
+
+The minimum number of tile moves needed to transform one valid tiling hierarchy into a different valid tiling hierarchy. Specifically: how many tile parent-attribution changes suffice to produce an alternative globally-consistent hierarchy?
+
+### Setup
+
+A "modification" is reassigning 1 tile from one supertile's children to another supertile's children (the tile's type is unchanged). A confusable pair (A, B) exists when B = A + 1 child of `differing_type`. Moving that 1 tile from B to A converts A→B and B→A simultaneously.
+
+Base-tile type-change distance was also analyzed: can changing a base tile's type (e.g., H→F) produce a valid alternative hierarchy?
+
+### Results (depth 3)
+
+| Metric | Hat | Spectre |
+|--------|-----|---------|
+| Confusable pair | P' ↔ F' (differ by 1 F child) | Mystic' ↔ Spectre' (differ by 1 Spectre child) |
+| P' children / F' children | 5 / 6 | — |
+| Mystic' children / Spectre' children | — | 7 / 8 |
+| Base-tile type-change distance | **∞** (child count determines type uniquely) | **∞** (child count determines type uniquely) |
+| Parent-attribution distance | **1** | **1** |
+| Cascade cost at level 1 | 0 | 0 |
+| Cascade cost at level 2 | 0 | 0 |
+| Sibling pair instances (level 1) | 42 | 55 |
+| Sibling pair instances (level 2) | 9 | 7 |
+| Total instances | 51 | 62 |
+
+### Why base-tile type changes cannot work
+
+Supertile types are uniquely determined by **child count**, not just composition multiset:
+- P' always has exactly 5 children; F' always has exactly 6. No type change to existing children can add or remove a child.
+- Mystic' always has 7 children; Spectre' always has 8. Same argument.
+
+Therefore the base-tile type-change distance is infinite for both systems.
+
+### Why cascade cost is always 0 for sibling swaps
+
+Moving 1 tile of `differing_type` from B (the larger sibling) to A (the smaller sibling):
+- A gains 1 child → composition matches B's old type. A is relabeled B.
+- B loses 1 child → composition matches A's old type. B is relabeled A.
+- The parent at the level above had (among other children) one instance of type A and one of type B. After the swap it still has one of each — just with relabeled indices. The parent's composition multiset is unchanged. **Zero cascade.**
+
+This is a combinatorial identity: swapping two elements in a multiset preserves the multiset.
+
+### Conclusion: hypothesis falsified
+
+The issue hypothesized that spectre's dense cascade structure would force modification distance > 1. This is false. **Both hat and spectre have minimum modification distance 1** (1 parent-attribution change, 0 cascade cost), exploiting their respective confusable pairs.
+
+The erasure resilience advantage measured in #17 (spectre survives more random erasures) is irrelevant for *adversarial* modifications. A coordinated adversary does not need to erase tiles; they need only identify any sibling confusable pair and move 1 tile. Both systems provide 51–62 such opportunities at depth 3.
+
+The modification distance is determined solely by the existence of a confusable pair and the presence of sibling instances in the hierarchy — not by the dependency graph density.
