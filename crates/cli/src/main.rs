@@ -55,7 +55,7 @@ enum Commands {
 
     /// Run the tiling-based interactive oracle proof
     Prove {
-        /// Seed metatile type: H, T, P, or F
+        /// Seed tile type (system-dependent, e.g. H/T/P/F for hat, Spectre/Mystic for spectre)
         #[arg(default_value = "H")]
         seed: String,
         /// Hierarchy depth (number of folding rounds)
@@ -64,6 +64,9 @@ enum Commands {
         /// Number of queries per round
         #[arg(short, long, default_value_t = 8)]
         queries: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
     },
 
     /// Demonstrate hole recovery (erase + recover + verify)
@@ -144,7 +147,7 @@ fn main() -> Result<()> {
         Commands::Sturmian { terms } => cmd_sturmian(terms),
         Commands::Matrix => cmd_matrix(),
         Commands::Fields => cmd_fields(),
-        Commands::Prove { seed, depth, queries } => cmd_prove(&seed, depth, queries),
+        Commands::Prove { seed, depth, queries, system } => cmd_prove(&seed, depth, queries, &system),
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
         Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
@@ -479,24 +482,22 @@ fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
-    let _span = info_span!("prove", seed, depth, queries = num_queries).entered();
+fn cmd_prove(seed: &str, depth: usize, num_queries: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("prove", seed, depth, queries = num_queries, system = system_name).entered();
     use ark_bls12_381::Fr;
     use std::time::Instant;
 
-    let seed_type = match seed.to_uppercase().as_str() {
-        "H" => tiling::metatile::MetatileType::H,
-        "T" => tiling::metatile::MetatileType::T,
-        "P" => tiling::metatile::MetatileType::P,
-        "F" => tiling::metatile::MetatileType::F,
-        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
-    };
+    let system = tiling::systems::resolve_system(system_name)?;
+    let seed_idx = resolve_seed(&*system, seed)?;
 
-    info!("Tiling IOP: seed={:?}, depth={}, queries={}\n", seed_type, depth, num_queries);
+    info!(
+        "Tiling IOP: system={}, seed={}, depth={}, queries={}\n",
+        system.name(), system.type_name(seed_idx), depth, num_queries
+    );
 
     // Build hierarchy
     let t0 = Instant::now();
-    let mut hierarchy = iop::hierarchy::build_hierarchy::<Fr>(seed_type, depth);
+    let mut hierarchy = iop::hierarchy::build_hierarchy_system::<Fr>(&*system, seed_idx, depth);
     let build_time = t0.elapsed();
 
     let base_tiles = hierarchy.levels[0].tile_types.len();
@@ -510,7 +511,7 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
 
     // Prove
     let t1 = Instant::now();
-    let proof = iop::prover::prove(&mut hierarchy, num_queries);
+    let proof = iop::prover::prove(&mut hierarchy, num_queries, &*system);
     let prove_time = t1.elapsed();
 
     // Estimate proof size (number of openings * ~64 bytes each + commitments)

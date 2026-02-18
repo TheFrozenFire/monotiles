@@ -1,4 +1,5 @@
 use ark_ff::PrimeField;
+use tiling::systems::TilingSystem;
 
 use crate::fold::fold_supertile;
 use crate::merkle::MerkleTree;
@@ -17,8 +18,10 @@ use crate::types::{
 pub fn prove<F: PrimeField>(
     hierarchy: &mut TilingHierarchy<F>,
     num_queries: usize,
+    system: &dyn TilingSystem,
 ) -> TilingProof<F> {
     let depth = hierarchy.depth;
+    let num_types = system.num_types();
 
     // Build Merkle tree for level 0 (base values already filled)
     let mut trees: Vec<MerkleTree> = Vec::with_capacity(depth + 1);
@@ -48,7 +51,7 @@ pub fn prove<F: PrimeField>(
         transcript.absorb_commitment(&level_commitments[k - 1].root);
 
         // Squeeze folding challenge for this round
-        let challenge = transcript.squeeze_challenge();
+        let challenge = transcript.squeeze_challenge(num_types);
 
         // Compute folded values at level k
         let parent = &hierarchy.levels[k];
@@ -129,6 +132,7 @@ pub fn prove<F: PrimeField>(
     }
 
     let final_values = hierarchy.levels[depth].values.clone();
+    let composition = system.composition().iter().map(|v| v.clone()).collect();
 
     TilingProof {
         commitment: TilingCommitment {
@@ -138,5 +142,6 @@ pub fn prove<F: PrimeField>(
         challenges,
         queries: all_queries,
         final_values,
+        composition,
     }
 }

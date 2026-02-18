@@ -1,13 +1,15 @@
 use ark_bls12_381::Fr;
 use ark_ff::{AdditiveGroup, Field};
 
-use iop::hierarchy::build_hierarchy;
+use iop::hierarchy::build_hierarchy_system;
 use iop::merkle::MerkleTree;
 use iop::prover::prove;
 use iop::transcript::Transcript;
 use iop::types::FoldingChallenge;
 use iop::verifier::verify;
-use tiling::metatile::MetatileType;
+use tiling::systems::hat::HatSystem;
+use tiling::systems::spectre::SpectreSystem;
+use tiling::systems::TilingSystem;
 
 /// Fill level-0 with random-looking deterministic values.
 fn fill_base_values(hierarchy: &mut iop::types::TilingHierarchy<Fr>) {
@@ -19,47 +21,52 @@ fn fill_base_values(hierarchy: &mut iop::types::TilingHierarchy<Fr>) {
 
 #[test]
 fn honest_prover_accepted() {
-    let mut hierarchy = build_hierarchy::<Fr>(MetatileType::H, 3);
+    let hat = HatSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&hat, 0, 3);
     fill_base_values(&mut hierarchy);
-    let proof = prove(&mut hierarchy, 8);
+    let proof = prove(&mut hierarchy, 8, &hat);
     assert!(verify(&proof).is_ok(), "honest proof should verify");
 }
 
 #[test]
 fn honest_prover_depth_1() {
-    let mut hierarchy = build_hierarchy::<Fr>(MetatileType::H, 1);
+    let hat = HatSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&hat, 0, 1);
     fill_base_values(&mut hierarchy);
-    let proof = prove(&mut hierarchy, 4);
+    let proof = prove(&mut hierarchy, 4, &hat);
     assert!(verify(&proof).is_ok());
 }
 
 #[test]
 fn honest_prover_depth_4() {
-    let mut hierarchy = build_hierarchy::<Fr>(MetatileType::H, 4);
+    let hat = HatSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&hat, 0, 4);
     fill_base_values(&mut hierarchy);
-    let proof = prove(&mut hierarchy, 8);
+    let proof = prove(&mut hierarchy, 8, &hat);
     assert!(verify(&proof).is_ok());
 }
 
 #[test]
 fn honest_prover_different_seeds() {
-    for seed in MetatileType::all() {
-        let mut hierarchy = build_hierarchy::<Fr>(seed, 2);
+    let hat = HatSystem::new();
+    for seed in 0..hat.num_types() {
+        let mut hierarchy = build_hierarchy_system::<Fr>(&hat, seed, 2);
         fill_base_values(&mut hierarchy);
-        let proof = prove(&mut hierarchy, 4);
+        let proof = prove(&mut hierarchy, 4, &hat);
         assert!(
             verify(&proof).is_ok(),
-            "honest proof with seed {:?} should verify",
-            seed
+            "honest proof with seed {} should verify",
+            hat.type_name(seed)
         );
     }
 }
 
 #[test]
 fn tampered_value_rejected() {
-    let mut hierarchy = build_hierarchy::<Fr>(MetatileType::H, 3);
+    let hat = HatSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&hat, 0, 3);
     fill_base_values(&mut hierarchy);
-    let mut proof = prove(&mut hierarchy, 8);
+    let mut proof = prove(&mut hierarchy, 8, &hat);
 
     // Tamper with a child value in the first query of the first round
     if let Some(first_round) = proof.queries.first_mut() {
@@ -76,21 +83,17 @@ fn tampered_value_rejected() {
 
 #[test]
 fn wrong_composition_rejected() {
-    let mut hierarchy = build_hierarchy::<Fr>(MetatileType::H, 3);
+    let hat = HatSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&hat, 0, 3);
     fill_base_values(&mut hierarchy);
-    let mut proof = prove(&mut hierarchy, 8);
+    let mut proof = prove(&mut hierarchy, 8, &hat);
 
     // Change a child's type to break composition
     if let Some(first_round) = proof.queries.first_mut() {
         if let Some(first_query) = first_round.first_mut() {
             if let Some(child) = first_query.children.first_mut() {
-                // Flip the type
-                child.child_type = match child.child_type {
-                    MetatileType::H => MetatileType::T,
-                    MetatileType::T => MetatileType::H,
-                    MetatileType::P => MetatileType::F,
-                    MetatileType::F => MetatileType::P,
-                };
+                // Flip the type (cycle through 0..4)
+                child.child_type = (child.child_type + 1) % hat.num_types();
             }
         }
     }
@@ -100,11 +103,21 @@ fn wrong_composition_rejected() {
 }
 
 #[test]
+fn spectre_honest_prover_accepted() {
+    let spectre = SpectreSystem::new();
+    let mut hierarchy = build_hierarchy_system::<Fr>(&spectre, 0, 3);
+    fill_base_values(&mut hierarchy);
+    let proof = prove(&mut hierarchy, 8, &spectre);
+    assert!(verify(&proof).is_ok(), "honest spectre proof should verify");
+}
+
+#[test]
 fn hierarchy_counts_match_matrix() {
     use analysis::spectral::hat_substitution_matrix;
 
+    let hat = HatSystem::new();
     let depth = 4;
-    let hierarchy = build_hierarchy::<Fr>(MetatileType::H, depth);
+    let hierarchy = build_hierarchy_system::<Fr>(&hat, 0, depth);
     let m = hat_substitution_matrix::<Fr>();
 
     // Seed vector: [1, 0, 0, 0] for H
@@ -126,8 +139,8 @@ fn hierarchy_counts_match_matrix() {
             .collect();
 
         let mut actual = [Fr::ZERO; 4];
-        for t in &level.tile_types {
-            actual[t.index()] += Fr::ONE;
+        for &t in &level.tile_types {
+            actual[t] += Fr::ONE;
         }
 
         for j in 0..4 {
@@ -147,7 +160,7 @@ fn fiat_shamir_deterministic() {
     let squeeze = || {
         let mut t = Transcript::new(b"determinism-test");
         t.absorb_commitment(&root);
-        let c: FoldingChallenge<Fr> = t.squeeze_challenge();
+        let c: FoldingChallenge<Fr> = t.squeeze_challenge(4);
         let idx = t.squeeze_query_index(100);
         (c, idx)
     };
@@ -155,20 +168,14 @@ fn fiat_shamir_deterministic() {
     let (c1, i1) = squeeze();
     let (c2, i2) = squeeze();
 
-    assert_eq!(c1.r_h, c2.r_h);
-    assert_eq!(c1.r_t, c2.r_t);
-    assert_eq!(c1.r_p, c2.r_p);
-    assert_eq!(c1.r_f, c2.r_f);
+    assert_eq!(c1.coeffs, c2.coeffs);
     assert_eq!(i1, i2);
 }
 
 #[test]
 fn merkle_openings_verify() {
     let leaves: Vec<_> = (0..20)
-        .map(|i| {
-            let t = MetatileType::all()[i % 4];
-            (t, Fr::from((i * 17 + 3) as u64))
-        })
+        .map(|i| (i % 4, Fr::from((i * 17 + 3) as u64)))
         .collect();
 
     let tree = MerkleTree::build(&leaves);

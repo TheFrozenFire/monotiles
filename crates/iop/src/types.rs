@@ -1,13 +1,12 @@
 use ark_ff::Field;
-use tiling::metatile::MetatileType;
 
 /// Reference from a parent tile to one of its children in the hierarchy.
 #[derive(Clone, Debug)]
 pub struct ChildRef {
     /// Index of this child in the parent's level (level k-1).
     pub child_index: usize,
-    /// Metatile type of this child.
-    pub child_type: MetatileType,
+    /// Type index of this child (system-dependent).
+    pub child_type: usize,
 }
 
 /// Oracle values and structure for a single level of the tiling hierarchy.
@@ -16,8 +15,8 @@ pub struct LevelOracle<F: Field> {
     pub level: usize,
     /// Field element assigned to each tile at this level.
     pub values: Vec<F>,
-    /// Metatile type of each tile at this level.
-    pub tile_types: Vec<MetatileType>,
+    /// Type index of each tile at this level (system-dependent).
+    pub tile_types: Vec<usize>,
     /// For each tile at this level, its children at the level below.
     /// Empty for level 0 (base).
     pub children: Vec<Vec<ChildRef>>,
@@ -28,28 +27,22 @@ pub struct LevelOracle<F: Field> {
 pub struct TilingHierarchy<F: Field> {
     /// Levels from 0 (base tiles) to depth (single root).
     pub levels: Vec<LevelOracle<F>>,
-    pub seed: MetatileType,
+    /// Type index of the seed tile at the top level.
+    pub seed: usize,
     pub depth: usize,
 }
 
-/// Per-round folding challenge with one random field element per metatile type.
+/// Per-round folding challenge: one random field element per tile type.
 #[derive(Clone, Debug)]
 pub struct FoldingChallenge<F: Field> {
-    pub r_h: F,
-    pub r_t: F,
-    pub r_p: F,
-    pub r_f: F,
+    /// coeffs[i] is the challenge coefficient for tile type i.
+    pub coeffs: Vec<F>,
 }
 
 impl<F: Field> FoldingChallenge<F> {
-    /// Get the challenge coefficient for a given metatile type.
-    pub fn for_type(&self, t: MetatileType) -> F {
-        match t {
-            MetatileType::H => self.r_h,
-            MetatileType::T => self.r_t,
-            MetatileType::P => self.r_p,
-            MetatileType::F => self.r_f,
-        }
+    /// Get the challenge coefficient for a given type index.
+    pub fn for_type(&self, type_idx: usize) -> F {
+        self.coeffs[type_idx]
     }
 }
 
@@ -80,7 +73,7 @@ pub struct MerkleProof {
 #[derive(Clone, Debug)]
 pub struct ChildOpening<F: Field> {
     pub child_index: usize,
-    pub child_type: MetatileType,
+    pub child_type: usize,
     pub value: F,
     pub proof: MerkleProof,
 }
@@ -90,7 +83,7 @@ pub struct ChildOpening<F: Field> {
 pub struct QueryResponse<F: Field> {
     pub level: usize,
     pub supertile_index: usize,
-    pub supertile_type: MetatileType,
+    pub supertile_type: usize,
     pub supertile_value: F,
     pub supertile_proof: MerkleProof,
     pub children: Vec<ChildOpening<F>>,
@@ -105,4 +98,7 @@ pub struct TilingProof<F: Field> {
     pub queries: Vec<Vec<QueryResponse<F>>>,
     /// Values at the top level (should be a single tile for depth > 0).
     pub final_values: Vec<F>,
+    /// Supertile composition rules: composition[type_idx] = counts per child type.
+    /// Used by the verifier to check child type distributions.
+    pub composition: Vec<Vec<usize>>,
 }

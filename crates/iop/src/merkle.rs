@@ -1,5 +1,4 @@
 use ark_ff::Field;
-use tiling::metatile::MetatileType;
 
 use crate::types::MerkleProof;
 
@@ -18,10 +17,10 @@ pub struct MerkleTree {
 }
 
 /// Hash a leaf: Blake3(0x01 || type_byte || value_bytes).
-fn hash_leaf<F: Field>(tile_type: MetatileType, value: &F) -> [u8; 32] {
+fn hash_leaf<F: Field>(tile_type: usize, value: &F) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&[0x01]); // leaf domain separator
-    hasher.update(&[tile_type.index() as u8]);
+    hasher.update(&[tile_type as u8]);
     // Serialize the field element
     let mut buf = Vec::new();
     ark_serialize::CanonicalSerialize::serialize_compressed(value, &mut buf)
@@ -46,7 +45,7 @@ fn zero_hash() -> [u8; 32] {
 
 impl MerkleTree {
     /// Build a Merkle tree from (type, value) leaves.
-    pub fn build<F: Field>(leaves: &[(MetatileType, F)]) -> Self {
+    pub fn build<F: Field>(leaves: &[(usize, F)]) -> Self {
         assert!(!leaves.is_empty(), "cannot build tree from empty leaves");
 
         let num_leaves = leaves.len();
@@ -110,7 +109,7 @@ impl MerkleTree {
     pub fn verify<F: Field>(
         root: &[u8; 32],
         proof: &MerkleProof,
-        tile_type: MetatileType,
+        tile_type: usize,
         value: &F,
         num_leaves: usize,
     ) -> bool {
@@ -140,30 +139,24 @@ mod tests {
 
     #[test]
     fn single_leaf_tree() {
-        let leaves = vec![(MetatileType::H, Fr::from(42u64))];
+        let leaves = vec![(0usize, Fr::from(42u64))];
         let tree = MerkleTree::build(&leaves);
         assert_eq!(tree.num_leaves(), 1);
 
         let proof = tree.open(0);
-        assert!(MerkleTree::verify(
-            &tree.root(),
-            &proof,
-            MetatileType::H,
-            &Fr::from(42u64),
-            1
-        ));
+        assert!(MerkleTree::verify(&tree.root(), &proof, 0usize, &Fr::from(42u64), 1));
     }
 
     #[test]
     fn wrong_value_rejected() {
-        let leaves = vec![(MetatileType::H, Fr::from(42u64))];
+        let leaves = vec![(0usize, Fr::from(42u64))];
         let tree = MerkleTree::build(&leaves);
         let proof = tree.open(0);
 
         assert!(!MerkleTree::verify(
             &tree.root(),
             &proof,
-            MetatileType::H,
+            0usize,
             &Fr::from(99u64),
             1
         ));
@@ -171,14 +164,14 @@ mod tests {
 
     #[test]
     fn wrong_type_rejected() {
-        let leaves = vec![(MetatileType::H, Fr::from(42u64))];
+        let leaves = vec![(0usize, Fr::from(42u64))];
         let tree = MerkleTree::build(&leaves);
         let proof = tree.open(0);
 
         assert!(!MerkleTree::verify(
             &tree.root(),
             &proof,
-            MetatileType::T,
+            1usize,
             &Fr::from(42u64),
             1
         ));
@@ -186,10 +179,9 @@ mod tests {
 
     #[test]
     fn multi_leaf_openings() {
-        let leaves: Vec<_> = MetatileType::all()
-            .iter()
+        let leaves: Vec<_> = (0..4usize)
             .enumerate()
-            .map(|(i, t)| (*t, Fr::from((i + 1) as u64)))
+            .map(|(i, t)| (t, Fr::from((i + 1) as u64)))
             .collect();
 
         let tree = MerkleTree::build(&leaves);
@@ -207,9 +199,7 @@ mod tests {
     #[test]
     fn non_power_of_two_leaves() {
         // 5 leaves should pad to 8
-        let leaves: Vec<_> = (0..5)
-            .map(|i| (MetatileType::H, Fr::from(i as u64)))
-            .collect();
+        let leaves: Vec<_> = (0..5).map(|i| (0usize, Fr::from(i as u64))).collect();
 
         let tree = MerkleTree::build(&leaves);
         assert_eq!(tree.padded_size, 8);
@@ -219,7 +209,7 @@ mod tests {
             assert!(MerkleTree::verify(
                 &tree.root(),
                 &proof,
-                MetatileType::H,
+                0usize,
                 &Fr::from(i as u64),
                 5
             ));
@@ -228,9 +218,7 @@ mod tests {
 
     #[test]
     fn deterministic_root() {
-        let leaves: Vec<_> = (0..3)
-            .map(|i| (MetatileType::P, Fr::from(i as u64)))
-            .collect();
+        let leaves: Vec<_> = (0..3).map(|i| (2usize, Fr::from(i as u64))).collect();
 
         let tree1 = MerkleTree::build(&leaves);
         let tree2 = MerkleTree::build(&leaves);

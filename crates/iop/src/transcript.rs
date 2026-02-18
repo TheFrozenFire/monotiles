@@ -26,14 +26,15 @@ impl Transcript {
         self.hasher.update(root);
     }
 
-    /// Squeeze a folding challenge (4 independent field elements).
-    pub fn squeeze_challenge<F: PrimeField>(&mut self) -> FoldingChallenge<F> {
-        FoldingChallenge {
-            r_h: self.squeeze_field_element(b"r_h"),
-            r_t: self.squeeze_field_element(b"r_t"),
-            r_p: self.squeeze_field_element(b"r_p"),
-            r_f: self.squeeze_field_element(b"r_f"),
-        }
+    /// Squeeze a folding challenge (one field element per tile type).
+    pub fn squeeze_challenge<F: PrimeField>(&mut self, num_types: usize) -> FoldingChallenge<F> {
+        let coeffs = (0..num_types)
+            .map(|i| {
+                let label = format!("r_{}", i);
+                self.squeeze_field_element(label.as_bytes())
+            })
+            .collect();
+        FoldingChallenge { coeffs }
     }
 
     /// Squeeze a random query index in [0, max).
@@ -70,16 +71,13 @@ mod tests {
 
         let mut t1 = Transcript::new(b"test");
         t1.absorb_commitment(&root);
-        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge();
+        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge(4);
 
         let mut t2 = Transcript::new(b"test");
         t2.absorb_commitment(&root);
-        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge();
+        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge(4);
 
-        assert_eq!(c1.r_h, c2.r_h);
-        assert_eq!(c1.r_t, c2.r_t);
-        assert_eq!(c1.r_p, c2.r_p);
-        assert_eq!(c1.r_f, c2.r_f);
+        assert_eq!(c1.coeffs, c2.coeffs);
     }
 
     #[test]
@@ -88,38 +86,37 @@ mod tests {
 
         let mut t1 = Transcript::new(b"label-a");
         t1.absorb_commitment(&root);
-        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge();
+        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge(4);
 
         let mut t2 = Transcript::new(b"label-b");
         t2.absorb_commitment(&root);
-        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge();
+        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge(4);
 
-        assert_ne!(c1.r_h, c2.r_h);
+        assert_ne!(c1.coeffs[0], c2.coeffs[0]);
     }
 
     #[test]
     fn different_commitments_different_challenges() {
         let mut t1 = Transcript::new(b"test");
         t1.absorb_commitment(&[0x11u8; 32]);
-        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge();
+        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge(4);
 
         let mut t2 = Transcript::new(b"test");
         t2.absorb_commitment(&[0x22u8; 32]);
-        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge();
+        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge(4);
 
-        assert_ne!(c1.r_h, c2.r_h);
+        assert_ne!(c1.coeffs[0], c2.coeffs[0]);
     }
 
     #[test]
     fn challenges_are_nonzero() {
         let mut t = Transcript::new(b"test");
         t.absorb_commitment(&[0x42u8; 32]);
-        let c: FoldingChallenge<Fr> = t.squeeze_challenge();
+        let c: FoldingChallenge<Fr> = t.squeeze_challenge(4);
 
-        assert_ne!(c.r_h, Fr::from(0u64));
-        assert_ne!(c.r_t, Fr::from(0u64));
-        assert_ne!(c.r_p, Fr::from(0u64));
-        assert_ne!(c.r_f, Fr::from(0u64));
+        for coeff in &c.coeffs {
+            assert_ne!(*coeff, Fr::from(0u64));
+        }
     }
 
     #[test]
@@ -131,5 +128,24 @@ mod tests {
             let idx = t.squeeze_query_index(100);
             assert!(idx < 100);
         }
+    }
+
+    #[test]
+    fn different_num_types_different_challenges() {
+        let root = [0xABu8; 32];
+
+        let mut t1 = Transcript::new(b"test");
+        t1.absorb_commitment(&root);
+        let c1: FoldingChallenge<Fr> = t1.squeeze_challenge(2);
+
+        let mut t2 = Transcript::new(b"test");
+        t2.absorb_commitment(&root);
+        let c2: FoldingChallenge<Fr> = t2.squeeze_challenge(4);
+
+        // 2-type challenge coeffs match the first 2 of 4-type challenge
+        assert_eq!(c1.coeffs[0], c2.coeffs[0]);
+        assert_eq!(c1.coeffs[1], c2.coeffs[1]);
+        assert_eq!(c1.coeffs.len(), 2);
+        assert_eq!(c2.coeffs.len(), 4);
     }
 }

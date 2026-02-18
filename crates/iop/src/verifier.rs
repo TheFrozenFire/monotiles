@@ -89,6 +89,7 @@ impl std::error::Error for VerificationError {}
 /// 3. Folding: children fold to the claimed supertile value
 pub fn verify<F: PrimeField>(proof: &TilingProof<F>) -> Result<(), VerificationError> {
     let depth = proof.commitment.depth;
+    let num_types = proof.composition.len();
 
     // Validate structural correctness
     if proof.challenges.len() != depth {
@@ -114,15 +115,12 @@ pub fn verify<F: PrimeField>(proof: &TilingProof<F>) -> Result<(), VerificationE
         transcript.absorb_commitment(&commitments[round].root);
 
         // Re-derive the challenge for round+1
-        let expected_challenge: crate::types::FoldingChallenge<F> = transcript.squeeze_challenge();
+        let expected_challenge: crate::types::FoldingChallenge<F> =
+            transcript.squeeze_challenge(num_types);
 
         // Verify challenge matches
         let actual = &proof.challenges[round];
-        if actual.r_h != expected_challenge.r_h
-            || actual.r_t != expected_challenge.r_t
-            || actual.r_p != expected_challenge.r_p
-            || actual.r_f != expected_challenge.r_f
-        {
+        if actual.coeffs != expected_challenge.coeffs {
             return Err(VerificationError::ChallengeMismatch { round });
         }
     }
@@ -186,6 +184,7 @@ pub fn verify<F: PrimeField>(proof: &TilingProof<F>) -> Result<(), VerificationE
                 qr.supertile_value,
                 &child_pairs,
                 challenge,
+                &proof.composition,
             ) {
                 return Err(VerificationError::FoldingFailure {
                     round: round_idx,

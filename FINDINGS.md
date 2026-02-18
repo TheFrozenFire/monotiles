@@ -316,3 +316,50 @@ Concrete measurements for the hat-tiling-based interactive oracle proof at depth
 | Result | ACCEPTED |
 
 The prove/verify ratio is ~5.3x, and both are sub-millisecond at this scale. The proof size is dominated by Merkle openings (280 × ~320 bytes each), not commitments.
+
+## Spectre vs Hat IOP Soundness (#21)
+
+The IOP crate was generalized from hat-specific (`MetatileType`) to system-generic (`usize` type indices), enabling `prove Spectre -S spectre` to run alongside hat. Results at 8 queries per round:
+
+### Proof size and openings by depth
+
+| Depth | System | Base tiles | Openings | Proof size | Prove | Verify |
+|-------|--------|------------|----------|------------|-------|--------|
+| 1 | Hat | 10 | 88 | ~30.3 KB | 17µs | 101µs |
+| 1 | Spectre | 8 | 72 | ~24.8 KB | 10µs | 53µs |
+| 2 | Hat | 64 | 143 | ~49.2 KB | 43µs | 140µs |
+| 2 | Spectre | 63 | 143 | ~49.2 KB | 45µs | 144µs |
+| 3 | Hat | 442 | 209 | ~72.0 KB | 232µs | 252µs |
+| 3 | Spectre | 496 | 214 | ~73.7 KB | 264µs | 278µs |
+| 4 | Hat | 3,025 | 281 | ~96.8 KB | 1.07ms | 284µs |
+| 4 | Spectre | 3,905 | 284 | ~97.8 KB | 1.13ms | 266µs |
+
+All proofs verified. Proof sizes are within 1-2% of each other at every depth.
+
+### Average children per query
+
+| Depth | Hat avg | Spectre avg |
+|-------|---------|-------------|
+| 1 | 10.0 | 8.0 |
+| 2 | 7.94 | 7.94 |
+| 3 | 7.71 | 7.92 |
+| 4 | 7.78 | 7.88 |
+
+At depth 1, hat always queries the H' supertile (10 children); spectre queries Spectre' (8 children). At deeper levels, hat's 4-type mix (H'=10, T'=1, P'=5, F'=6, weighted by Perron eigenvector) pulls the average below spectre's uniform 7-8.
+
+### Structural analysis: why the soundness question was malformed
+
+The original hypothesis was that spectre's "no anchor" structure would translate to stronger IOP soundness than hat's T'-anchored structure. This was wrong about the relevant notion of soundness.
+
+**This IOP proves algebraic consistency of folded values, not semantic tiling validity.** The prover commits to field values at each level, and the verifier checks that committed values fold correctly under the Fiat-Shamir challenges. Soundness — the bound on cheating probability — depends on:
+
+1. The binding property of the Merkle commitments (Blake3 collision resistance)
+2. The uniformity of the folding challenges (Fiat-Shamir randomness)
+
+Neither of these depends on tiling structure. The confusability of supertile types (P'↔F' in hat, Mystic'↔Spectre' in spectre) is irrelevant: even if type labels are ambiguous, the prover cannot change committed field values without finding Blake3 preimages.
+
+**The T' anchor has no soundness effect in this construction.** Hat's 1-child T' type means T'-queries require only 2 hash openings (1 supertile + 1 child), while spectre queries always require 8-9 openings. This makes hat queries cheaper, but does not change the algebraic soundness bound. A cheating prover cannot exploit the cheap T' position because changing a committed T'-child value would require a hash collision.
+
+**Where tiling structure would matter.** If the IOP were extended to prove *semantic validity* — that the committed hierarchy is actually a valid tiling (correct tile shapes, consistent adjacencies, chirality constraints) — then spectre's no-reflection constraint and anchor-free uniformity would become relevant. Spectre's geometric rigidity (no reflected tiles) means there is one fewer degree of freedom for a cheating prover to exploit when constructing a semantically plausible fake hierarchy. Hat's chirality freedom provides the prover with local choices that do not violate the algebraic folding check but do violate geometric tiling validity.
+
+This is an open direction: building an IOP that also commits to the *geometric* placement of tiles, not just their field values, and where spectre's rigidity provides measurable soundness improvement.
