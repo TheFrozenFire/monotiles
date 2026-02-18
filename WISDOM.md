@@ -152,3 +152,48 @@ The answer is no, and the reason is a combinatorial identity so simple it's easy
 **Why this is non-obvious.** It feels like changing two children's types should change the parent's composition, because "composition" tracks type counts. But the swap is symmetric: A loses one child and gains one child of the same net effect on the parent's count of A-labeled children (−1 becomes a B), and the parent's count of B-labeled children (+1 a new B, but −1 because B lost a label to A). The +1 and −1 cancel exactly.
 
 **The practical implication.** This means the modification distance for sibling swaps is determined entirely by the structure at the level of the swapped pair, not by the density of dependencies above them. No matter how deeply entangled the hierarchy is above level k, a sibling swap at level k costs exactly 1 and propagates zero levels upward. The dense cascade structure of spectre (which gives it superior tamper detection against *random* erasure) provides no defense against this *adversarial* one-move attack on the combinatorial structure.
+
+## Rust, ROCQ, and CAS Are Three Different Tools for Three Different Jobs
+
+After building a substantial body of experimental findings and then reasoning about which open questions to pursue formally, the project falls into a clear three-way division that is easy to blur unless you think about it explicitly.
+
+**Rust is the laboratory.** It runs experiments, measures behaviors at specific parameters, and produces data. The erasure sweeps, swap counts, proof size curves, and convergence observations are all Rust work. Rust answers "what happens at depth 3 with 100 trials?" It does not answer "does this hold for all depths?"
+
+**ROCQ is the proof archive.** It takes the cleanest claims from the laboratory and establishes them as theorems that hold universally — not just for the depths and seeds we tested. ROCQ proves by structural induction, case analysis, and algebraic identity. It cannot run an erasure sweep, but it can prove that the local-to-global gap is zero below radius = depth for *every* depth, which the Rust experiments can only confirm for depths 3–6.
+
+**A CAS (PARI/GP, SageMath, Magma) is the calculator.** It computes Galois groups, class numbers, Smith normal forms, discriminants, and zeta functions. These are one-shot algebraic computations — not experiments, not proofs. The results can then be recorded as facts (in RESEARCH.md) and optionally verified in ROCQ.
+
+### Which open issues belong where
+
+**ROCQ-primary** (the value is a universal formal proof, not a measurement):
+- **#55** Smith normal form of the substitution matrices — Mathcomp's SNF algorithm gives a certified computation
+- **#54** Exact closed form of spectre swap density — an algebraic identity certifiable in ROCQ
+- Formalizing the cascade cost = 0 argument (#35 content) — two-case induction, ideal for ROCQ
+- Formalizing canonical form uniqueness (#33 content) — structural induction on the inflation rule
+- Formalizing the gap sharpness (#6/#16 content) — depth induction, establishes the universal claim
+- Formalizing the bimodal cost landscape (#43) — extends the cascade proof to all non-sibling modifications
+- The commitment scheme security proof (#44) — binding reduces to hash collision; hiding follows from the gap
+
+**CAS-then-record** (algebraic number theory computations, results go to RESEARCH.md):
+- **#49** Characteristic polynomial coefficients and Galois group — PARI `galoisinit`
+- **#52** Number field invariants: discriminant, class number, unit group — PARI `bnfinit`
+- **#56** Zeta function rational form and Mahler measure — symbolic computation from eigenvalues
+
+**Rust-primary** (scale, measurement, iteration):
+- **#40** Spectre threshold at depth 5–6 — needs large tile counts
+- **#39** Semantic geometric IOP — needs implementation and measurement
+- **#42** Fuzzy extractor erasure characterization — needs noise model experiments
+- **#51** Spectral gap empirical validation — matrix powers, Frobenius norm decay
+- **#53** Coordinate ring extraction — data extraction from the running tiling system
+
+**Hybrid** (Rust or CAS for computation, ROCQ for the formal consequence):
+- **#50** Pisot/Salem classification — CAS computes conjugate magnitudes; ROCQ verifies the exact polynomial has all other roots inside the unit circle
+- **#43** Non-malleable code — Rust experiments on cost-2 modification outputs; ROCQ proves the bimodal landscape universally
+
+### The key dependency
+
+**#49 is the algebraic foundation.** The characteristic polynomial coefficients, minimal polynomial, and Galois group unlock #50, #51, #52, and #56 in parallel. Almost every number-theoretic issue depends on having the exact eigenvalue fields established first. Do #49 in a CAS before investing in ROCQ formalization of downstream results.
+
+### Why this matters for the project trajectory
+
+The Rust findings establish *what is true* at practical scales. The ROCQ proofs establish *why it must always be true*. Without ROCQ, the cryptographic primitive constructions (#42–#48) rest on empirically observed properties that could fail at untested scales or parameters. With ROCQ formalization of the core structural lemmas (gap sharpness, canonical form uniqueness, bimodal cost landscape, zero cascade), the security proofs for those primitives become formal reductions rather than handwaving.
