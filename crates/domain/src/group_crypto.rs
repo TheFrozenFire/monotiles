@@ -165,10 +165,21 @@ pub fn recover_cotiler(
         .collect();
     candidates.sort_by(|a, b| coxeter_sort_key(a).partial_cmp(&coxeter_sort_key(b)).unwrap());
 
+    eprintln!(
+        "  [recover] target_size={}, group_expanded={}, valid_candidates={}, search_space~=C({},{})",
+        target_size,
+        group_elements.len(),
+        candidates.len(),
+        candidates.len(),
+        target_size - 1,
+    );
+
     // Backtracking search: build cotilers of size target_size starting with identity
     let mut solutions = Vec::new();
     let mut current = vec![CoxeterElement::identity()];
     let mut covered: HashSet<_> = tile.iter().copied().collect();
+
+    let mut nodes_visited = 0u64;
 
     fn backtrack(
         candidates: &[CoxeterElement],
@@ -180,7 +191,12 @@ pub fn recover_cotiler(
         generators: &[CoxeterElement],
         tile: &[CoxeterElement; 16],
         start_idx: usize,
+        nodes_visited: &mut u64,
     ) {
+        *nodes_visited += 1;
+        if *nodes_visited % 1_000_000 == 0 {
+            eprintln!("  [recover] nodes visited: {}M, depth={}/{}", *nodes_visited / 1_000_000, current.len(), target_size);
+        }
         if solutions.len() >= max_solutions {
             return;
         }
@@ -225,6 +241,7 @@ pub fn recover_cotiler(
                 generators,
                 tile,
                 i + 1,
+                nodes_visited,
             );
 
             current.pop();
@@ -244,8 +261,10 @@ pub fn recover_cotiler(
         generators,
         &tile,
         0,
+        &mut nodes_visited,
     );
 
+    eprintln!("  [recover] done: {} nodes visited, {} solutions", nodes_visited, solutions.len());
     solutions
 }
 
