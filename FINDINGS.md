@@ -151,6 +151,80 @@ The "Determined %" exceeds "Surviving %" at erasure fractions above ~45% — mea
 
 The recovery dependency graph (radius 1) has 360 edges, cycles, and a bimodal in-degree distribution: 370 tiles with degree 0 (self-determined) and 72 tiles with degree 5 (dependent on all siblings). Maximum chain length is 4.
 
+## Spectre vs Hat Erasure Resilience (#17)
+
+The spectre system has **worse** erasure resilience than the hat, contradicting the hypothesis that fewer tile types would yield better tolerance.
+
+### Confusable pairs: both systems have exactly one
+
+| Property | Hat | Spectre |
+|----------|-----|---------|
+| Tile types | 4 (H/T/P/F) | 2 (Spectre/Mystic) |
+| Supertile types | 4 (H'/T'/P'/F') | 2 (Spectre'/Mystic') |
+| Valid swaps | 1: P'(5) + 1F = F'(6) | 1: Mystic'(7) + 1Spectre = Spectre'(8) |
+| Critical positions | 0/22 (0.0%) | 0/15 (0.0%) |
+
+The hypothesis that spectre has zero confusable pairs was wrong. The sub-multiset relationship exists at the supertile level: Mystic' is a proper sub-multiset of Spectre', differing by one Spectre tile.
+
+### Minimum determining sets
+
+| Supertile | Children | Min det. set | Notes |
+|-----------|----------|-------------|-------|
+| **Hat H'** | 10 | **1** (pos 3, a T) | T only appears in H-supertiles |
+| **Hat T'** | 1 | **1** (pos 0, an H) | Only 1 child total |
+| Hat P' | 5 | 5 (all) | Confusable with F' |
+| Hat F' | 6 | 6 (all) | Confusable with P' |
+| Spectre Spectre' | 8 | **7** (all non-Mystic) | Confusable with Mystic' |
+| Spectre Mystic' | 7 | **7** (all) | Confusable with Spectre' |
+
+Hat has two "anchor" types (H', T') identifiable from a single child. Spectre has **no anchors** — both types require all children for determination.
+
+### Erasure sweep comparison (depth 3, 100 trials)
+
+| Erasure % | Hat surviving | Hat determined | Spectre surviving | Spectre determined |
+|-----------|-------------|---------------|-------------------|-------------------|
+| 0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| 10% | 90.0% | 79.7% | 89.9% | 50.1% |
+| 20% | 80.1% | 72.9% | 80.0% | 38.4% |
+| 30% | 69.9% | 67.8% | 70.0% | 38.2% |
+| 40% | 60.0% | 65.2% | 60.1% | 39.6% |
+| 50% | 50.0% | 60.2% | 50.0% | 42.6% |
+| 60% | 40.0% | 55.2% | 39.9% | 44.1% |
+| 70% | 30.1% | 48.0% | 30.0% | 44.2% |
+| 80% | 19.9% | 41.9% | 20.0% | 38.0% |
+| 90% | 10.0% | 35.6% | 10.1% | 34.5% |
+
+Hat degrades gracefully, with determined% exceeding surviving% above ~45% erasure. Spectre collapses immediately: 10% erasure destroys half of all type determination. The spectre determined% then plateaus around 38-44% through the mid-range, never exceeding surviving%.
+
+**Phase transition**: Hat at ~60-70% erasure. Spectre at ~10-20% erasure.
+
+### Dependency graph comparison
+
+| Metric | Hat | Spectre |
+|--------|-----|---------|
+| Base tiles (depth 3) | 442 | 496 |
+| Total edges | 360 | 2,695 |
+| Edges per tile | 0.81 | 5.43 |
+| Has cycles | yes | yes |
+| Max chain length | 4 | 8 |
+| Max in-degree | 5 | 7 |
+| Degree-0 tiles (self-determined) | 370 (83.7%) | 111 (22.4%) |
+| High-degree tiles | 72 at degree 5 | 385 at degree 7 |
+
+Hat's graph is sparse: 84% of tiles are self-determined (degree 0), with only 16% depending on siblings. Spectre's graph is dense: 78% of tiles depend on all 7 siblings, creating cascading failures under erasure.
+
+### Why fewer types means worse resilience
+
+The counter-intuitive result comes from three reinforcing factors:
+
+1. **No anchor types.** Hat's 4-type system includes H' and T', which are identifiable from a single child tile. These act as fixed recovery points — even heavy erasure leaves many anchors intact. Spectre's 2-type system has no such anchors; both types are mutually confusable.
+
+2. **Universal confusability.** In hat, only P' and F' participate in the confusable pair (2 of 4 types). In spectre, *both* types participate (2 of 2 types). Every supertile boundary is vulnerable, not just some.
+
+3. **Dense dependency cascades.** Spectre's larger supertile size (7-8 children vs 1-10 for hat) means each tile depends on more siblings. Losing one tile affects 7 others, which affect 7 more each. Hat's bimodal structure (most tiles at degree 0) contains cascades.
+
+The hypothesis confused *type-level diversity* with *structural resilience*. Having more types with heterogeneous compositions creates natural anchoring points. Fewer types with homogeneous compositions means every boundary is equally fragile.
+
 ## Tiling IOP Performance (#9)
 
 Concrete measurements for the hat-tiling-based interactive oracle proof at depth 4 (3025 base tiles, 5 hierarchy levels):
