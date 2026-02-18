@@ -1102,3 +1102,76 @@ These guarantees are impossible with a dense Merkle tree over a tile index list.
 - The overhead is small (~5–7 hashes) and approximately constant across depths — both path lengths grow linearly at nearly the same rate.
 - The Coxeter (132-bit) or SHA-256 (256-bit) fixed-width keys have crossover depths of 44+ and 86+ respectively, both impractical for this problem.
 - The practical question (#37) is not proof size: it is whether non-membership proofs are needed. If gap-free coverage checking is a requirement, compact-key SMT is the right data structure with modest proof overhead.
+
+## Concatenated Hat+Spectre Hybrid Code: Structural Decomposition Beats Flat Depth (#25)
+
+**Hypothesis**: Concatenating hat (inner, erasure-correcting) and spectre (outer, tamper-detecting) into a hybrid code would improve both erasure resilience and tamper detection over either system alone.
+
+**Experiment**: `cargo run --release -- hybrid-code --d-inner 2 --d-outer 2 --erasure-trials 100`. Inner code = hat at depth 2 (64 tiles/block); outer code = spectre at depth 2 (63 blocks). Baselines: hat-only at depth 4 and spectre-only at depth 4.
+
+### System sizes
+
+| Configuration | Depth | Leaf tiles |
+|--------------|-------|-----------|
+| Hybrid (hat inner × spectre outer) | 2+2 | 4032 |
+| Hat-only flat | 4 | 3025 |
+| Spectre-only flat | 4 | 3905 |
+
+### Tamper detection: both layers have blind spots
+
+**Refutes the original hypothesis.** Both hat and spectre have exactly 1 valid swap each:
+- Hat (inner): P'↔F' — differ by 1 F-tile; composition check cannot distinguish within a block
+- Spectre (outer): Mystic'↔Spectre' — Spectre' has 1 more Spectre child; composition check has the same blind spot at block level
+
+The original hypothesis that spectre has 0 valid swaps was refuted by #17. The hybrid does not eliminate undetectable substitutions — it requires an adversary to simultaneously evade both layers, raising attack cost without removing the vulnerability.
+
+### Erasure thresholds
+
+| Configuration | Erasure threshold (last fraction >50% determination) |
+|--------------|------------------------------------------------------|
+| Hat inner (depth 2) | 90% |
+| Spectre outer (depth 2) | 90% |
+| Hat-only flat (depth 4) | 40% |
+| Spectre-only flat (depth 4) | 0% |
+
+### Uniform erasure recovery
+
+| Erase% | Hat flat (d=4) | Hat inner (d=2) | Spectre outer (d=2) | Hybrid |
+|--------|---------------|-----------------|---------------------|--------|
+| 0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| 10% | 73.3% | 87.8% | 73.4% | **100.0%** |
+| 20% | 63.5% | 86.5% | 80.7% | **100.0%** |
+| 30% | 55.1% | 88.5% | 84.1% | **100.0%** |
+| 40% | 50.4% | 86.7% | 85.0% | **100.0%** |
+| 50% | 44.2% | 89.3% | 87.2% | **100.0%** |
+| 60% | 37.9% | 84.8% | 85.6% | **100.0%** |
+| 70% | 31.4% | 79.3% | 86.5% | **100.0%** |
+| 80% | 24.3% | 74.6% | 79.2% | **100.0%** |
+| 90% | 17.2% | 68.3% | 73.7% | **100.0%** |
+| 100% | 0.0% | 0.0% | 0.0% | 0.0% |
+
+The hybrid achieves 100% recovery at every uniform erasure fraction from 0–90%, dramatically outperforming hat-flat at depth 4 (which degrades immediately from 100% to 73.3% at 10% erasure).
+
+### Block-structured burst erasure recovery
+
+| k blocks erased | Outer fraction | Hybrid recovery% | Hat-flat equiv% |
+|----------------|---------------|-----------------|----------------|
+| 1 | 1.6% | 100.0% | 100.0% |
+| 2 | 3.2% | 100.0% | 100.0% |
+| 4 | 6.3% | 100.0% | 73.3% |
+| 8 | 12.7% | 100.0% | 63.5% |
+| 16 | 25.4% | 100.0% | 55.1% |
+| 32 | 50.8% | 100.0% | 31.4% |
+| 63 | 100.0% | 0.0% | 0.0% |
+
+Outer spectre threshold = 90% → up to 56 of 63 complete blocks can be erased and recovered. Hat-flat at depth 4 using leaf-level adjacency cannot exploit block structure; erasure of 32 blocks (50.8% outer fraction) reduces hat-flat to only 31.4% recovery.
+
+### Conclusions
+
+1. **The zero-swap hypothesis for spectre was wrong.** Spectre has exactly 1 valid swap (Mystic'↔Spectre'), same as hat (P'↔F'). The hybrid does not give tamper-detection improvement — both layers have blind spots.
+
+2. **The erasure advantage is real but structural, not compositional.** Keeping each layer at shallow depth (d=2) preserves both at 90% threshold. Concatenating them yields near-perfect recovery for uniform erasure up to 90%, vs hat-flat at depth 4 = 40%. The benefit is not "hat corrects, spectre detects" — it is that shallow layers outperform deep layers.
+
+3. **Spectre depth collapse makes flat spectre useless at d=4.** Spectre-flat at depth 4 shows 0% threshold (consistent with findings #17, #23 on exponential depth collapse). The outer spectre at d=2 retains 90% threshold and is the reason the hybrid succeeds.
+
+4. **Block-structured burst erasure is where the hybrid shines.** By maintaining a dedicated outer block-recovery layer, the hybrid recovers from complete-block erasures up to 50.8% outer fraction at 100% recovery, while hat-flat loses ground rapidly.
