@@ -151,6 +151,40 @@ The "Determined %" exceeds "Surviving %" at erasure fractions above ~45% — mea
 
 The recovery dependency graph (radius 1) has 360 edges, cycles, and a bimodal in-degree distribution: 370 tiles with degree 0 (self-determined) and 72 tiles with degree 5 (dependent on all siblings). Maximum chain length is 4.
 
+## Hat-Turtle Is Identical to Hat on the Correcting/Detecting Spectrum (#22)
+
+Hat-turtle produces identical vulnerability results to hat on every measurable metric, to the decimal place.
+
+| Metric | Hat | Hat-Turtle |
+|--------|-----|------------|
+| Valid swaps | 1: P'↔F' | 1: P'↔F' |
+| Critical positions | 0/22 (0%) | 0/22 (0%) |
+| Min det. set H' | 1 | 1 |
+| Min det. set T' | 1 | 1 |
+| Min det. set P' | 5 (all) | 5 (all) |
+| Min det. set F' | 6 (all) | 6 (all) |
+| Erasure threshold | ~60-70% | ~60-70% |
+| Dep. graph edges | 360 | 360 |
+| Max chain length | 4 | 4 |
+| Degree-0 tiles | 370 (83.7%) | 370 (83.7%) |
+| Base tiles (depth 3) | 442 | 442 |
+
+The erasure sweep is also identical:
+
+| Erasure % | Hat determined | Hat-Turtle determined |
+|-----------|---------------|----------------------|
+| 10% | 79.7% | 79.7% |
+| 30% | 67.8% | 67.8% |
+| 50% | 60.2% | 60.2% |
+| 70% | 48.0% | 48.0% |
+| 90% | 35.6% | 35.6% |
+
+### Interpretation
+
+Hat and hat-turtle share the same substitution matrix — they differ only in the geometric shape of the base tile (hat vs turtle), not in the algebraic rules of how supertiles compose. The vulnerability analysis depends entirely on the substitution matrix (child type-bags, confusable pairs, dependency structure), not on tile geometry. Identical matrix → identical spectrum position.
+
+**The correcting/detecting spectrum has only two points so far: {hat, hat-turtle} at one end and {spectre} at the other.** Hat-turtle does not give us a third data point between them — it confirms hat and hat-turtle are the same point. The spectrum is determined by substitution algebra, not tile shape. Testing additional geometric variants of the same substitution system will not move the needle.
+
 ## Spectre vs Hat Erasure Resilience (#17)
 
 The spectre system has **worse** erasure resilience than the hat, contradicting the hypothesis that fewer tile types would yield better tolerance.

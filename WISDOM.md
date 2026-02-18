@@ -105,6 +105,14 @@ The minimum determining set for H' is a single tile: the T at position 3. This w
 
 In contrast, P' and F' require all their children because they differ by only one F-tile and share all other child types. The determining set size is controlled by the confusability structure, not the supertile size.
 
+## The Correcting/Detecting Spectrum Is Algebraic, Not Geometric
+
+Hat and hat-turtle produce identical vulnerability results to the decimal place — same erasure threshold, same dependency graph, same confusable pairs, same minimum determining sets. They use different tile shapes (hat vs turtle) but share the same substitution matrix.
+
+This means the correcting/detecting spectrum is a property of the **substitution matrix algebra**, not of the geometric tile shape. If you want to move a tiling system along the spectrum, you need to change the substitution rules — how many children each supertile type has, and what types they are. Changing the geometric realization of the same rules changes nothing.
+
+The practical implication: testing additional geometric variants of hat (there are others in the literature) will not give new data points. To explore the spectrum, you need substitution systems with genuinely different matrix structures — different numbers of types, different child counts, different confusability patterns.
+
 ## Hat and Spectre Are Complementary Codes, Not Competing Ones
 
 The erasure experiments (#17) initially looked like "hat good, spectre bad." But they're measuring complementary properties.
