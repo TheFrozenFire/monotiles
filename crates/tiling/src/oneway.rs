@@ -1,27 +1,17 @@
 //! One-way substitution function analysis.
 //!
-//! Investigates whether the hat tiling substitution exhibits computational
+//! Investigates whether tiling substitutions exhibit computational
 //! one-wayness: inflation is local (O(n)), but can deflation also be done
 //! locally, or does it require global context?
 //!
-//! The key question: given only the MetatileTypes of tiles in a radius-r
+//! The key question: given only the type indices of tiles in a radius-r
 //! neighborhood, can the center tile's parent assignment be uniquely determined?
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use crate::adjacency::inflation_adjacency;
-use crate::metatile::{
-    supertile_composition, InflationRule, MetatileType, SUPERTILE_F_CHILDREN,
-    SUPERTILE_H_CHILDREN, SUPERTILE_P_CHILDREN, SUPERTILE_T_CHILDREN,
-};
-
-/// Child index lists for each supertile type, in canonical order (H, T, P, F).
-const SUPERTILE_CHILDREN: [&[usize]; 4] = [
-    SUPERTILE_H_CHILDREN,
-    SUPERTILE_T_CHILDREN,
-    SUPERTILE_P_CHILDREN,
-    SUPERTILE_F_CHILDREN,
-];
+use crate::metatile::MetatileType;
+use crate::systems::hat::HatSystem;
+use crate::systems::TilingSystem;
 
 /// A flat hierarchy for analysis, without field elements or Merkle trees.
 ///
@@ -30,9 +20,10 @@ const SUPERTILE_CHILDREN: [&[usize]; 4] = [
 /// (single seed tile).
 pub struct FlatHierarchy {
     pub depth: usize,
-    pub seed: MetatileType,
-    /// `tile_types[level][tile_idx]` = MetatileType of that tile.
-    pub tile_types: Vec<Vec<MetatileType>>,
+    pub seed_type: usize,
+    pub num_types: usize,
+    /// `tile_types[level][tile_idx]` = type index of that tile.
+    pub tile_types: Vec<Vec<usize>>,
     /// `parent_of[level][tile_idx]` = parent index at level+1.
     /// Valid for levels 0..depth-1.
     pub parent_of: Vec<Vec<usize>>,
@@ -41,22 +32,16 @@ pub struct FlatHierarchy {
     pub position_in_parent: Vec<Vec<usize>>,
 }
 
-/// Build a flat hierarchy top-down from seed.
-///
-/// Duplicates minimal logic from `iop::hierarchy::build_hierarchy` to avoid
-/// a circular dependency (iop depends on tiling, not the reverse).
-pub fn build_flat_hierarchy(seed: MetatileType, depth: usize) -> FlatHierarchy {
-    let rules = crate::metatile::inflation_rules();
-    let child_type_of = |idx: usize| -> MetatileType {
-        match &rules[idx] {
-            InflationRule::Seed(t) => *t,
-            InflationRule::Adjacent { child_type, .. } => *child_type,
-            InflationRule::Bridge { child_type, .. } => *child_type,
-        }
-    };
+/// Build a flat hierarchy top-down from seed, using the given tiling system.
+pub fn build_hierarchy(
+    system: &dyn TilingSystem,
+    seed: usize,
+    depth: usize,
+) -> FlatHierarchy {
+    let num_types = system.num_types();
 
     // Build top-down: top_types[0] = top level (single seed)
-    let mut top_types: Vec<Vec<MetatileType>> = Vec::with_capacity(depth + 1);
+    let mut top_types: Vec<Vec<usize>> = Vec::with_capacity(depth + 1);
     let mut parent_maps: Vec<Vec<usize>> = Vec::new();
     let mut position_maps: Vec<Vec<usize>> = Vec::new();
 
@@ -64,14 +49,14 @@ pub fn build_flat_hierarchy(seed: MetatileType, depth: usize) -> FlatHierarchy {
 
     for _step in 0..depth {
         let parent_types = top_types.last().unwrap();
-        let mut child_tiles: Vec<MetatileType> = Vec::new();
+        let mut child_tiles: Vec<usize> = Vec::new();
         let mut parents: Vec<usize> = Vec::new();
         let mut positions: Vec<usize> = Vec::new();
 
         for (parent_idx, &parent_type) in parent_types.iter().enumerate() {
-            let assigned_indices = SUPERTILE_CHILDREN[parent_type.index()];
+            let assigned_indices = system.supertile_children(parent_type);
             for (local_idx, &rule_idx) in assigned_indices.iter().enumerate() {
-                child_tiles.push(child_type_of(rule_idx));
+                child_tiles.push(system.inflation_child_type(rule_idx));
                 parents.push(parent_idx);
                 positions.push(local_idx);
             }
@@ -89,11 +74,17 @@ pub fn build_flat_hierarchy(seed: MetatileType, depth: usize) -> FlatHierarchy {
 
     FlatHierarchy {
         depth,
-        seed,
+        seed_type: seed,
+        num_types,
         tile_types: top_types,
         parent_of: parent_maps,
         position_in_parent: position_maps,
     }
+}
+
+/// Build a flat hierarchy using the hat tiling system.
+pub fn build_flat_hierarchy(seed: MetatileType, depth: usize) -> FlatHierarchy {
+    build_hierarchy(&HatSystem::new(), seed.index(), depth)
 }
 
 /// Flat parent assignment: for each tile at level k, which parent index at level k+1.
@@ -102,10 +93,6 @@ pub fn parent_assignments(seed: MetatileType, depth: usize) -> Vec<Vec<usize>> {
 }
 
 /// Build adjacency graph where all siblings (same parent) are mutually adjacent.
-///
-/// This is the simplest adjacency model: every tile can see all its siblings
-/// at radius 1. Since supertile compositions have unique type signatures,
-/// this makes deflation trivially solvable at radius 1.
 pub fn full_sibling_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec<Vec<usize>> {
     assert!(level < hierarchy.depth, "level must be < depth for parent info");
     let n = hierarchy.tile_types[level].len();
@@ -132,18 +119,17 @@ pub fn full_sibling_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec<Ve
 /// Build adjacency graph using intra-supertile inflation adjacency.
 ///
 /// Two tiles at the given level are adjacent if they share the same parent AND
-/// their corresponding inflation indices are adjacent in the inflation graph.
-/// This is a stricter (sparser) adjacency than `full_sibling_adjacency`.
-///
-/// Note: H' supertile children are disconnected under this adjacency
-/// (two components: {0,9,16,27,26,6,1,8,10,15} splits into two groups
-/// connected only through boundary children not in the hierarchy).
-pub fn intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec<Vec<usize>> {
+/// their corresponding inflation indices are adjacent in the system's inflation graph.
+pub fn intra_supertile_adjacency(
+    system: &dyn TilingSystem,
+    hierarchy: &FlatHierarchy,
+    level: usize,
+) -> Vec<Vec<usize>> {
     assert!(level < hierarchy.depth, "level must be < depth for parent info");
     let n = hierarchy.tile_types[level].len();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
 
-    let infl_adj = inflation_adjacency();
+    let infl_adj = system.inflation_adjacency();
 
     // Group tiles by parent
     let mut parent_groups: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -154,7 +140,7 @@ pub fn intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec
     for children in parent_groups.values() {
         let parent_idx = hierarchy.parent_of[level][children[0]];
         let parent_type = hierarchy.tile_types[level + 1][parent_idx];
-        let assigned = SUPERTILE_CHILDREN[parent_type.index()];
+        let assigned = system.supertile_children(parent_type);
 
         // Map position_in_parent -> tile_idx for this parent's children
         let mut pos_to_tile: HashMap<usize, usize> = HashMap::new();
@@ -166,8 +152,8 @@ pub fn intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec
         // Check inflation adjacency between children of the same parent
         for (&pos_a, &tile_a) in &pos_to_tile {
             let infl_idx_a = assigned[pos_a];
-            for neighbor in &infl_adj.adjacencies[infl_idx_a] {
-                if let Some(pos_b) = assigned.iter().position(|&x| x == neighbor.neighbor) {
+            for &neighbor in &infl_adj[infl_idx_a] {
+                if let Some(pos_b) = assigned.iter().position(|&x| x == neighbor) {
                     if let Some(&tile_b) = pos_to_tile.get(&pos_b) {
                         if tile_a != tile_b && !adj[tile_a].contains(&tile_b) {
                             adj[tile_a].push(tile_b);
@@ -179,6 +165,12 @@ pub fn intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec
     }
 
     adj
+}
+
+/// Backward-compatible wrapper: intra-supertile adjacency using the hat system.
+#[cfg(test)]
+fn hat_intra_supertile_adjacency(hierarchy: &FlatHierarchy, level: usize) -> Vec<Vec<usize>> {
+    intra_supertile_adjacency(&HatSystem::new(), hierarchy, level)
 }
 
 /// BFS neighborhood: all tiles reachable within `radius` hops (including the tile itself).
@@ -207,7 +199,7 @@ pub fn neighborhood(adjacency: &[Vec<usize>], tile: usize, radius: usize) -> Has
 /// Captures the local structure around a tile as seen through the adjacency graph.
 /// Two tiles with identical type signatures have indistinguishable local neighborhoods
 /// (up to the given radius) when only tile types are observable.
-pub(crate) type TypeSignature = Vec<(usize, [usize; 4])>;
+pub(crate) type TypeSignature = Vec<(usize, Vec<usize>)>;
 
 pub(crate) fn type_signature(
     hierarchy: &FlatHierarchy,
@@ -216,6 +208,7 @@ pub(crate) fn type_signature(
     tile: usize,
     radius: usize,
 ) -> TypeSignature {
+    let num_types = hierarchy.num_types;
     let mut visited: HashMap<usize, usize> = HashMap::new();
     let mut queue = VecDeque::new();
     queue.push_back((tile, 0usize));
@@ -234,10 +227,11 @@ pub(crate) fn type_signature(
     }
 
     // Group by distance, count types per shell
-    let mut by_distance: BTreeMap<usize, [usize; 4]> = BTreeMap::new();
+    let mut by_distance: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&tile_idx, &dist) in &visited {
-        let type_idx = hierarchy.tile_types[level][tile_idx].index();
-        by_distance.entry(dist).or_insert([0; 4])[type_idx] += 1;
+        let type_idx = hierarchy.tile_types[level][tile_idx];
+        let entry = by_distance.entry(dist).or_insert_with(|| vec![0; num_types]);
+        entry[type_idx] += 1;
     }
 
     by_distance.into_iter().collect()
@@ -271,7 +265,7 @@ pub fn compute_determination_radii(
 
         // Tiles in a group with uniform parent type are determined at this radius
         for tiles in groups.values() {
-            let parent_types: HashSet<MetatileType> = tiles
+            let parent_types: HashSet<usize> = tiles
                 .iter()
                 .map(|&t| {
                     let parent = hierarchy.parent_of[level][t];
@@ -297,118 +291,135 @@ pub fn compute_determination_radii(
 }
 
 /// Given a bag of tile types (no positions/adjacency), count valid decompositions
-/// into supertile compositions.
+/// into supertile compositions using the given system.
 ///
-/// Due to the linear independence of the composition matrix rows, the system
-/// of equations has at most one non-negative integer solution. Returns 1 if
-/// a valid decomposition exists, 0 otherwise.
-///
-/// The composition matrix:
-/// - H' = [3, 1, 3, 3]
-/// - T' = [1, 0, 0, 0]
-/// - P' = [2, 0, 1, 2]
-/// - F' = [2, 0, 1, 3]
-pub fn count_decompositions(type_counts: [usize; 4]) -> u64 {
-    let [h, t, p, f] = type_counts;
+/// For systems with invertible composition matrices (hat: det=-1, spectre: det=1),
+/// the decomposition is unique when it exists.
+pub fn count_decompositions(system: &dyn TilingSystem, type_counts: &[usize]) -> u64 {
+    let composition = system.composition();
+    let n = system.num_types();
+    assert_eq!(type_counts.len(), n);
 
-    // Solving: 3*n_H + n_T + 2*n_P + 2*n_F = h
-    //          n_H                           = t
-    //          3*n_H +       n_P +   n_F     = p
-    //          3*n_H +      2*n_P + 3*n_F    = f
-    //
-    // From row 2: n_H = t
-    // From rows 3,4: n_F = f - 2p + 3t, n_P = 3p - 6t - f
-    // From row 1: n_T = h + 3t - 2p
-
-    // Check non-negativity using checked arithmetic
-    let n_h = t;
-
-    let n_f = match (f + 3 * t).checked_sub(2 * p) {
-        Some(v) => v,
-        None => return 0,
-    };
-
-    let n_p = match (3 * p).checked_sub(6 * t + f) {
-        Some(v) => v,
-        None => return 0,
-    };
-
-    let n_t = match (h + 3 * t).checked_sub(2 * p) {
-        Some(v) => v,
-        None => return 0,
-    };
-
-    // Verify round-trip (guards against overflow/logic errors)
-    let check_h = 3 * n_h + n_t + 2 * n_p + 2 * n_f;
-    let check_t = n_h;
-    let check_p = 3 * n_h + n_p + n_f;
-    let check_f = 3 * n_h + 2 * n_p + 3 * n_f;
-
-    if check_h == h && check_t == t && check_p == p && check_f == f {
-        1
-    } else {
-        0
+    // Solve M^T * x = type_counts via Gaussian elimination
+    let mut mat: Vec<Vec<i64>> = vec![vec![0; n + 1]; n];
+    for i in 0..n {
+        for j in 0..n {
+            mat[i][j] = composition[j][i] as i64; // M^T[i][j] = composition[j][i]
+        }
+        mat[i][n] = type_counts[i] as i64;
     }
+
+    // Forward elimination
+    for col in 0..n {
+        let pivot_row = match (col..n).find(|&r| mat[r][col] != 0) {
+            Some(r) => r,
+            None => return 0, // Singular
+        };
+        mat.swap(col, pivot_row);
+
+        let pivot = mat[col][col];
+        for row in (col + 1)..n {
+            let factor = mat[row][col];
+            if factor == 0 {
+                continue;
+            }
+            for j in col..=n {
+                mat[row][j] = mat[row][j] * pivot - mat[col][j] * factor;
+            }
+        }
+    }
+
+    // Back-substitution
+    let mut x = vec![0i64; n];
+    for i in (0..n).rev() {
+        let mut sum = mat[i][n];
+        for j in (i + 1)..n {
+            sum -= mat[i][j] * x[j];
+        }
+        if mat[i][i] == 0 {
+            return 0;
+        }
+        if sum % mat[i][i] != 0 {
+            return 0;
+        }
+        x[i] = sum / mat[i][i];
+        if x[i] < 0 {
+            return 0;
+        }
+    }
+
+    // Verify round-trip
+    for j in 0..n {
+        let mut check: i64 = 0;
+        for i in 0..n {
+            check += x[i] * composition[i][j] as i64;
+        }
+        if check != type_counts[j] as i64 {
+            return 0;
+        }
+    }
+
+    1
+}
+
+/// Hat-specific decomposition count (backward compatible).
+pub fn count_decompositions_hat(type_counts: [usize; 4]) -> u64 {
+    count_decompositions(&HatSystem::new(), &type_counts)
 }
 
 /// Greedy deflation: assign tiles to supertiles by type-count matching.
 ///
 /// Uses only the flat list of tile types (no adjacency or position info).
-/// Since the decomposition is unique when it exists, this determines the
-/// exact number of each supertile type needed, then greedily assigns tiles.
-///
-/// Returns the per-tile parent type assignment (None if unassigned) and
-/// the fraction of tiles successfully assigned.
-pub fn greedy_deflate(types: &[MetatileType]) -> (Vec<Option<MetatileType>>, f64) {
-    let comp = supertile_composition();
-    let n = types.len();
-    let mut assignments: Vec<Option<MetatileType>> = vec![None; n];
+pub fn greedy_deflate(
+    system: &dyn TilingSystem,
+    type_indices: &[usize],
+) -> (Vec<Option<usize>>, f64) {
+    let comp = system.composition();
+    let n = type_indices.len();
+    let num_types = system.num_types();
+    let mut assignments: Vec<Option<usize>> = vec![None; n];
     let mut assigned = vec![false; n];
 
     // Compute type counts
-    let mut type_counts = [0usize; 4];
-    for t in types {
-        type_counts[t.index()] += 1;
+    let mut type_counts = vec![0usize; num_types];
+    for &t in type_indices {
+        type_counts[t] += 1;
     }
 
-    if count_decompositions(type_counts) == 0 {
+    if count_decompositions(system, &type_counts) == 0 {
         return (assignments, 0.0);
     }
 
-    // Unique decomposition formula
-    let [h, t, p, f] = type_counts;
-    let target = [
-        t,                    // n_H' = t (number of T-type tiles)
-        h + 3 * t - 2 * p,   // n_T'
-        3 * p - 6 * t - f,   // n_P'
-        f + 3 * t - 2 * p,   // n_F'
-    ];
-    let supertile_types = MetatileType::all();
+    // Solve for number of each supertile type needed
+    let target = solve_supertile_counts(system, &type_counts);
+    let target = match target {
+        Some(t) => t,
+        None => return (assignments, 0.0),
+    };
 
     let mut success = 0usize;
-    for (st_idx, &st_type) in supertile_types.iter().enumerate() {
-        let needed = comp[st_idx];
+    for st_idx in 0..num_types {
+        let needed = &comp[st_idx];
         for _ in 0..target[st_idx] {
-            let mut found = [0usize; 4];
+            let mut found = vec![0usize; num_types];
             let mut group = Vec::new();
 
-            for (i, tile_type) in types.iter().enumerate() {
+            for (i, &tile_type) in type_indices.iter().enumerate() {
                 if assigned[i] {
                     continue;
                 }
-                let ti = tile_type.index();
-                if found[ti] < needed[ti] {
-                    found[ti] += 1;
+                if found[tile_type] < needed[tile_type] {
+                    found[tile_type] += 1;
                     group.push(i);
                 }
-                if found == needed {
+                if found == *needed {
                     break;
                 }
             }
 
-            if found == needed {
+            if found == *needed {
                 for &idx in &group {
-                    assignments[idx] = Some(st_type);
+                    assignments[idx] = Some(st_idx);
                     assigned[idx] = true;
                     success += 1;
                 }
@@ -420,20 +431,70 @@ pub fn greedy_deflate(types: &[MetatileType]) -> (Vec<Option<MetatileType>>, f64
     (assignments, rate)
 }
 
+/// Hat-specific greedy deflation (backward compatible).
+pub fn greedy_deflate_hat(types: &[MetatileType]) -> (Vec<Option<MetatileType>>, f64) {
+    let indices: Vec<usize> = types.iter().map(|t| t.index()).collect();
+    let (assignments, rate) = greedy_deflate(&HatSystem::new(), &indices);
+    let converted = assignments
+        .iter()
+        .map(|a| a.map(|i| MetatileType::all()[i]))
+        .collect();
+    (converted, rate)
+}
+
+/// Solve for the number of each supertile type given tile counts.
+fn solve_supertile_counts(system: &dyn TilingSystem, type_counts: &[usize]) -> Option<Vec<usize>> {
+    let composition = system.composition();
+    let n = system.num_types();
+
+    let mut mat: Vec<Vec<i64>> = vec![vec![0; n + 1]; n];
+    for i in 0..n {
+        for j in 0..n {
+            mat[i][j] = composition[j][i] as i64;
+        }
+        mat[i][n] = type_counts[i] as i64;
+    }
+
+    for col in 0..n {
+        let pivot_row = (col..n).find(|&r| mat[r][col] != 0)?;
+        mat.swap(col, pivot_row);
+        let pivot = mat[col][col];
+        for row in (col + 1)..n {
+            let factor = mat[row][col];
+            if factor == 0 {
+                continue;
+            }
+            for j in col..=n {
+                mat[row][j] = mat[row][j] * pivot - mat[col][j] * factor;
+            }
+        }
+    }
+
+    let mut x = vec![0i64; n];
+    for i in (0..n).rev() {
+        let mut sum = mat[i][n];
+        for j in (i + 1)..n {
+            sum -= mat[i][j] * x[j];
+        }
+        if mat[i][i] == 0 || sum % mat[i][i] != 0 {
+            return None;
+        }
+        x[i] = sum / mat[i][i];
+        if x[i] < 0 {
+            return None;
+        }
+    }
+
+    Some(x.iter().map(|&v| v as usize).collect())
+}
+
 /// Local deflation: use r-hop neighborhoods to resolve parent type assignment.
-///
-/// For each tile, computes its type signature at the given radius. If the
-/// signature uniquely identifies the parent type (compared against all tiles
-/// in the hierarchy), assigns that type. Otherwise marks as unresolved.
-///
-/// Returns (assignments, unresolved_count). Unresolved tiles get their
-/// ground-truth parent type (for comparison purposes).
 pub fn local_deflate(
     hierarchy: &FlatHierarchy,
     adjacency: &[Vec<usize>],
     level: usize,
     radius: usize,
-) -> (Vec<MetatileType>, usize) {
+) -> (Vec<usize>, usize) {
     let n = hierarchy.tile_types[level].len();
     let mut assignments = Vec::with_capacity(n);
     let mut unresolved = 0;
@@ -443,7 +504,7 @@ pub fn local_deflate(
         .collect();
 
     // Group by signature to find unique parent types
-    let mut groups: HashMap<&TypeSignature, HashSet<MetatileType>> = HashMap::new();
+    let mut groups: HashMap<&TypeSignature, HashSet<usize>> = HashMap::new();
     for (i, sig) in sigs.iter().enumerate() {
         let parent = hierarchy.parent_of[level][i];
         let parent_type = hierarchy.tile_types[level + 1][parent];
@@ -468,32 +529,22 @@ pub fn local_deflate(
 
 /// Per-level analysis results.
 pub struct LevelResult {
-    /// Histogram: determination radius -> number of tiles at that radius.
     pub radii_histogram: BTreeMap<usize, usize>,
-    /// Tiles that couldn't be determined within max_radius.
     pub undetermined: usize,
-    /// Min determination radius (None if all undetermined).
     pub min_radius: Option<usize>,
-    /// Max determination radius (None if any undetermined).
     pub max_radius: Option<usize>,
-    /// Mean determination radius (over determined tiles only).
     pub mean_radius: f64,
 }
 
 /// Complete one-way analysis results.
 pub struct OnewayAnalysis {
     pub depth: usize,
-    pub seed: MetatileType,
+    pub seed_type: usize,
     pub tiles_per_level: Vec<usize>,
-    /// Per-level results with full sibling adjacency (levels 0..depth-1).
     pub full_sibling: Vec<LevelResult>,
-    /// Per-level results with intra-supertile inflation adjacency.
     pub inflation_adj: Vec<LevelResult>,
-    /// Number of valid type-bag decompositions for the base level.
     pub base_decomposition_count: u64,
-    /// Greedy deflation success rate (fraction of tiles assigned).
     pub greedy_success_rate: f64,
-    /// Local deflation results at radius 1 with full sibling adjacency.
     pub local_deflate_unresolved: usize,
 }
 
@@ -535,9 +586,14 @@ fn summarize_radii(radii: &[Option<usize>]) -> LevelResult {
     }
 }
 
-/// Run the full one-way substitution analysis.
-pub fn analyze(seed: MetatileType, depth: usize, max_radius: usize) -> OnewayAnalysis {
-    let hierarchy = build_flat_hierarchy(seed, depth);
+/// Run the full one-way substitution analysis for a given tiling system.
+pub fn analyze_system(
+    system: &dyn TilingSystem,
+    seed: usize,
+    depth: usize,
+    max_radius: usize,
+) -> OnewayAnalysis {
+    let hierarchy = build_hierarchy(system, seed, depth);
 
     let tiles_per_level: Vec<usize> = hierarchy.tile_types.iter().map(|v| v.len()).collect();
 
@@ -545,26 +601,24 @@ pub fn analyze(seed: MetatileType, depth: usize, max_radius: usize) -> OnewayAna
     let mut inflation_adj_results = Vec::new();
 
     for level in 0..depth {
-        // Full sibling adjacency analysis
         let fs_adj = full_sibling_adjacency(&hierarchy, level);
         let fs_radii = compute_determination_radii(&hierarchy, &fs_adj, level, max_radius);
         full_sibling.push(summarize_radii(&fs_radii));
 
-        // Intra-supertile inflation adjacency analysis
-        let is_adj = intra_supertile_adjacency(&hierarchy, level);
+        let is_adj = intra_supertile_adjacency(system, &hierarchy, level);
         let is_radii = compute_determination_radii(&hierarchy, &is_adj, level, max_radius);
         inflation_adj_results.push(summarize_radii(&is_radii));
     }
 
     // Base-level decomposition count
-    let mut base_type_counts = [0usize; 4];
-    for t in &hierarchy.tile_types[0] {
-        base_type_counts[t.index()] += 1;
+    let mut base_type_counts = vec![0usize; system.num_types()];
+    for &t in &hierarchy.tile_types[0] {
+        base_type_counts[t] += 1;
     }
-    let base_decomposition_count = count_decompositions(base_type_counts);
+    let base_decomposition_count = count_decompositions(system, &base_type_counts);
 
     // Greedy deflation on base level
-    let (_, greedy_success_rate) = greedy_deflate(&hierarchy.tile_types[0]);
+    let (_, greedy_success_rate) = greedy_deflate(system, &hierarchy.tile_types[0]);
 
     // Local deflation at radius 1 with full sibling adjacency
     let local_deflate_unresolved = if depth > 0 {
@@ -577,7 +631,7 @@ pub fn analyze(seed: MetatileType, depth: usize, max_radius: usize) -> OnewayAna
 
     OnewayAnalysis {
         depth,
-        seed,
+        seed_type: seed,
         tiles_per_level,
         full_sibling,
         inflation_adj: inflation_adj_results,
@@ -585,6 +639,11 @@ pub fn analyze(seed: MetatileType, depth: usize, max_radius: usize) -> OnewayAna
         greedy_success_rate,
         local_deflate_unresolved,
     }
+}
+
+/// Hat-specific analyze (backward compatible).
+pub fn analyze(seed: MetatileType, depth: usize, max_radius: usize) -> OnewayAnalysis {
+    analyze_system(&HatSystem::new(), seed.index(), depth, max_radius)
 }
 
 #[cfg(test)]
@@ -599,10 +658,9 @@ mod tests {
 
         for (level_idx, level_types) in hierarchy.tile_types.iter().enumerate() {
             let mut counts = [0usize; 4];
-            for t in level_types {
-                counts[t.index()] += 1;
+            for &t in level_types {
+                counts[t] += 1;
             }
-            // hierarchy level k corresponds to generate_counts level (depth - k)
             let gen_level = depth - level_idx;
             assert_eq!(
                 counts, expected[gen_level],
@@ -631,7 +689,7 @@ mod tests {
     #[test]
     fn intra_supertile_adjacency_is_symmetric() {
         let hierarchy = build_flat_hierarchy(MetatileType::H, 2);
-        let adj = intra_supertile_adjacency(&hierarchy, 0);
+        let adj = hat_intra_supertile_adjacency(&hierarchy, 0);
 
         for (i, neighbors) in adj.iter().enumerate() {
             for &j in neighbors {
@@ -646,8 +704,6 @@ mod tests {
 
     #[test]
     fn determination_radius_at_depth_1() {
-        // At depth 1, there's exactly 1 parent. Every tile's parent is trivially
-        // determined at radius 0.
         let hierarchy = build_flat_hierarchy(MetatileType::H, 1);
         let adj = full_sibling_adjacency(&hierarchy, 0);
         let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
@@ -664,11 +720,11 @@ mod tests {
 
     #[test]
     fn decomposition_count_single_supertile() {
-        // Each supertile's composition has exactly 1 decomposition (itself)
-        let comp = supertile_composition();
+        let comp = crate::metatile::supertile_composition();
+        let system = HatSystem::new();
         for row in &comp {
             assert_eq!(
-                count_decompositions(*row),
+                count_decompositions(&system, &row[..]),
                 1,
                 "single supertile composition {:?} should have exactly 1 decomposition",
                 row
@@ -678,22 +734,22 @@ mod tests {
 
     #[test]
     fn decomposition_count_zero_for_invalid() {
-        // A type-bag that can't form any valid supertile grouping
-        assert_eq!(count_decompositions([0, 0, 0, 1]), 0);
-        assert_eq!(count_decompositions([0, 1, 0, 0]), 0);
+        let system = HatSystem::new();
+        assert_eq!(count_decompositions(&system, &[0, 0, 0, 1]), 0);
+        assert_eq!(count_decompositions(&system, &[0, 1, 0, 0]), 0);
     }
 
     #[test]
     fn decomposition_uniqueness_from_hierarchy() {
-        // The base level of any valid hierarchy should have exactly 1 decomposition
+        let system = HatSystem::new();
         for depth in 1..=3 {
             let hierarchy = build_flat_hierarchy(MetatileType::H, depth);
-            let mut counts = [0usize; 4];
-            for t in &hierarchy.tile_types[0] {
-                counts[t.index()] += 1;
+            let mut counts = vec![0usize; 4];
+            for &t in &hierarchy.tile_types[0] {
+                counts[t] += 1;
             }
             assert_eq!(
-                count_decompositions(counts),
+                count_decompositions(&system, &counts),
                 1,
                 "depth {} base level should have exactly 1 decomposition",
                 depth
@@ -703,9 +759,9 @@ mod tests {
 
     #[test]
     fn greedy_deflate_full_assignment() {
-        // On a valid hierarchy's base level, greedy should assign all tiles
+        let system = HatSystem::new();
         let hierarchy = build_flat_hierarchy(MetatileType::H, 2);
-        let (assignments, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+        let (assignments, rate) = greedy_deflate(&system, &hierarchy.tile_types[0]);
 
         assert!(
             (rate - 1.0).abs() < 1e-10,
@@ -754,8 +810,6 @@ mod tests {
 
     #[test]
     fn full_sibling_determines_all_at_depth_2() {
-        // With full sibling adjacency, all tiles at depth 2 should be
-        // determined at radius <= 1.
         let hierarchy = build_flat_hierarchy(MetatileType::H, 2);
         let adj = full_sibling_adjacency(&hierarchy, 0);
         let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
@@ -778,8 +832,8 @@ mod tests {
         let expected = crate::substitution::generate_counts(seed, depth);
         for (level_idx, level_types) in hierarchy.tile_types.iter().enumerate() {
             let mut counts = [0usize; 4];
-            for t in level_types {
-                counts[t.index()] += 1;
+            for &t in level_types {
+                counts[t] += 1;
             }
             let gen_level = depth - level_idx;
             assert_eq!(
@@ -791,16 +845,16 @@ mod tests {
     }
 
     fn assert_decomposition_unique_all_levels(seed: MetatileType, depth: usize) {
+        let system = HatSystem::new();
         let hierarchy = build_flat_hierarchy(seed, depth);
         for level in 0..=depth {
-            let mut counts = [0usize; 4];
-            for t in &hierarchy.tile_types[level] {
-                counts[t.index()] += 1;
+            let mut counts = vec![0usize; 4];
+            for &t in &hierarchy.tile_types[level] {
+                counts[t] += 1;
             }
             if level < depth {
-                // Non-top levels should have a unique decomposition
                 assert_eq!(
-                    count_decompositions(counts),
+                    count_decompositions(&system, &counts),
                     1,
                     "seed {:?} depth {} level {} should have unique decomposition",
                     seed, depth, level
@@ -821,8 +875,9 @@ mod tests {
 
     #[test]
     fn large_greedy_deflate_succeeds() {
+        let system = HatSystem::new();
         let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
-        let (assignments, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+        let (assignments, rate) = greedy_deflate(&system, &hierarchy.tile_types[0]);
         assert!(
             (rate - 1.0).abs() < 1e-10,
             "greedy deflation at depth {} should assign all {} tiles, got rate {}",
@@ -835,8 +890,6 @@ mod tests {
 
     #[test]
     fn large_full_sibling_all_determined_radius_1() {
-        // The core claim: with full sibling adjacency, every tile at every
-        // level is determined at radius <= 1.
         let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
         for level in 0..LARGE_DEPTH {
             let adj = full_sibling_adjacency(&hierarchy, level);
@@ -860,11 +913,8 @@ mod tests {
 
     #[test]
     fn large_inflation_adj_all_determined_radius_4() {
-        // With intra-supertile inflation adjacency, every tile is determined
-        // within radius 4 (due to H' supertile being disconnected).
         let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
-        // Only test base level (largest) — upper levels are tested at smaller depths
-        let adj = intra_supertile_adjacency(&hierarchy, 0);
+        let adj = hat_intra_supertile_adjacency(&hierarchy, 0);
         let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
         let undetermined = radii.iter().filter(|r| r.is_none()).count();
         let max_r = radii.iter().filter_map(|r| *r).max().unwrap_or(0);
@@ -895,8 +945,6 @@ mod tests {
 
     #[test]
     fn large_determination_radius_distribution_stable() {
-        // The fraction of tiles at each determination radius should be
-        // stable across depths (self-similar structure).
         let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
         let adj = full_sibling_adjacency(&hierarchy, 0);
         let radii = compute_determination_radii(&hierarchy, &adj, 0, 1);
@@ -905,11 +953,9 @@ mod tests {
         let at_r0 = radii.iter().filter(|r| **r == Some(0)).count() as f64;
         let fraction_r0 = at_r0 / n;
 
-        // T-type tiles are ~4.86% of the total (T count / total count).
-        // These are exactly the tiles determined at radius 0.
         let mut type_counts = [0usize; 4];
-        for t in &hierarchy.tile_types[0] {
-            type_counts[t.index()] += 1;
+        for &t in &hierarchy.tile_types[0] {
+            type_counts[t] += 1;
         }
         let t_fraction = type_counts[1] as f64 / n;
 
@@ -948,9 +994,10 @@ mod tests {
 
     #[test]
     fn all_seeds_greedy_deflate_depth_4() {
+        let system = HatSystem::new();
         for seed in MetatileType::all() {
             let hierarchy = build_flat_hierarchy(seed, 4);
-            let (_, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+            let (_, rate) = greedy_deflate(&system, &hierarchy.tile_types[0]);
             assert!(
                 (rate - 1.0).abs() < 1e-10,
                 "seed {:?} depth 4: greedy rate {}",
@@ -978,9 +1025,10 @@ mod tests {
     #[test]
     #[ignore]
     fn xlarge_greedy_deflate_succeeds() {
+        let system = HatSystem::new();
         let hierarchy = build_flat_hierarchy(MetatileType::H, XLARGE_DEPTH);
         let n = hierarchy.tile_types[0].len();
-        let (assignments, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+        let (assignments, rate) = greedy_deflate(&system, &hierarchy.tile_types[0]);
         assert!(
             (rate - 1.0).abs() < 1e-10,
             "greedy deflation at depth {} should assign all {} tiles, got rate {}",
@@ -1011,7 +1059,7 @@ mod tests {
     #[ignore]
     fn xlarge_inflation_adj_all_determined_radius_4() {
         let hierarchy = build_flat_hierarchy(MetatileType::H, XLARGE_DEPTH);
-        let adj = intra_supertile_adjacency(&hierarchy, 0);
+        let adj = hat_intra_supertile_adjacency(&hierarchy, 0);
         let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
         let undetermined = radii.iter().filter(|r| r.is_none()).count();
         let max_r = radii.iter().filter_map(|r| *r).max().unwrap_or(0);

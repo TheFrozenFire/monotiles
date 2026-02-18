@@ -948,6 +948,7 @@ dependencies = [
 name = "tiling"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ark-ff",
  "ark-std",
  "domain",

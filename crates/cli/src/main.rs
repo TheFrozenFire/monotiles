@@ -18,12 +18,15 @@ enum Commands {
 
     /// Compute metatile counts at each substitution level
     Inflate {
-        /// Seed metatile type: H, T, P, or F
+        /// Seed tile type (system-dependent, e.g. H/T/P/F for hat, Spectre/Mystic for spectre)
         #[arg(default_value = "H")]
         seed: String,
         /// Number of substitution levels
         #[arg(short, long, default_value_t = 5)]
         levels: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
     },
 
     /// Generate and display a Sturmian word
@@ -74,7 +77,7 @@ enum Commands {
 
     /// Analyze one-way substitution function (deflation locality)
     Oneway {
-        /// Seed metatile type: H, T, P, or F
+        /// Seed tile type (system-dependent)
         #[arg(default_value = "H")]
         seed: String,
         /// Hierarchy depth (substitution levels)
@@ -83,6 +86,9 @@ enum Commands {
         /// Maximum neighborhood radius to test
         #[arg(short = 'r', long, default_value_t = 5)]
         max_radius: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
     },
 
     /// Analyze recoverability vulnerability (per-position criticality, erasure thresholds)
@@ -93,6 +99,9 @@ enum Commands {
         /// Number of erasure trials per fraction
         #[arg(short, long, default_value_t = 100)]
         erasure_trials: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
     },
 }
 
@@ -104,15 +113,15 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::VerifyCoxeter => cmd_verify_coxeter(),
         Commands::Cucaracha => cmd_cucaracha(),
-        Commands::Inflate { seed, levels } => cmd_inflate(&seed, levels),
+        Commands::Inflate { seed, levels, system } => cmd_inflate(&seed, levels, &system),
         Commands::Sturmian { terms } => cmd_sturmian(terms),
         Commands::Matrix => cmd_matrix(),
         Commands::Fields => cmd_fields(),
         Commands::Prove { seed, depth, queries } => cmd_prove(&seed, depth, queries),
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
-        Commands::Oneway { seed, depth, max_radius } => cmd_oneway(&seed, depth, max_radius),
-        Commands::Vulnerability { depth, erasure_trials } => cmd_vulnerability(depth, erasure_trials),
+        Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
+        Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
     }
 }
 
@@ -215,28 +224,57 @@ fn cmd_cucaracha() -> Result<()> {
     Ok(())
 }
 
-fn cmd_inflate(seed: &str, levels: usize) -> Result<()> {
-    let seed_type = match seed.to_uppercase().as_str() {
-        "H" => tiling::metatile::MetatileType::H,
-        "T" => tiling::metatile::MetatileType::T,
-        "P" => tiling::metatile::MetatileType::P,
-        "F" => tiling::metatile::MetatileType::F,
-        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
-    };
+/// Resolve a seed type name to an index for the given tiling system.
+fn resolve_seed(
+    system: &dyn tiling::systems::TilingSystem,
+    seed: &str,
+) -> Result<usize> {
+    let upper = seed.to_uppercase();
+    for i in 0..system.num_types() {
+        if system.type_name(i).to_uppercase() == upper {
+            return Ok(i);
+        }
+    }
+    // Also try parsing as integer index
+    if let Ok(idx) = seed.parse::<usize>() {
+        if idx < system.num_types() {
+            return Ok(idx);
+        }
+    }
+    let valid: Vec<&str> = (0..system.num_types())
+        .map(|i| system.type_name(i))
+        .collect();
+    anyhow::bail!(
+        "Unknown seed type '{}' for {} system. Valid: {}",
+        seed,
+        system.name(),
+        valid.join(", ")
+    )
+}
 
-    let counts = tiling::substitution::generate_counts(seed_type, levels);
-    let hat_counts = tiling::substitution::hat_counts(seed_type, levels);
+fn cmd_inflate(seed: &str, levels: usize, system_name: &str) -> Result<()> {
+    let system = tiling::systems::resolve_system(system_name)?;
+    let seed_idx = resolve_seed(&*system, seed)?;
+    let counts = tiling::substitution::generate_counts_system(&*system, seed_idx, levels);
 
-    println!("Substitution from seed {:?}, {} levels:\n", seed_type, levels);
-    println!("{:<8} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10}", "Level", "H", "T", "P", "F", "Total", "Hats");
-    println!("{}", "-".repeat(70));
+    let num_types = system.num_types();
+    let header: Vec<String> = (0..num_types)
+        .map(|i| format!("{:>8}", system.type_name(i)))
+        .collect();
 
-    for (level, (count, hats)) in counts.iter().zip(hat_counts.iter()).enumerate() {
+    println!(
+        "Substitution from seed {} ({}), {} levels:\n",
+        system.type_name(seed_idx),
+        system.name(),
+        levels
+    );
+    println!("{:<8} {} {:>10}", "Level", header.join(""), "Total");
+    println!("{}", "-".repeat(18 + 8 * num_types));
+
+    for (level, count) in counts.iter().enumerate() {
+        let vals: Vec<String> = count.iter().map(|c| format!("{:>8}", c)).collect();
         let total: usize = count.iter().sum();
-        println!(
-            "{:<8} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10}",
-            level, count[0], count[1], count[2], count[3], total, hats
-        );
+        println!("{:<8} {} {:>10}", level, vals.join(""), total);
     }
 
     Ok(())
@@ -467,24 +505,22 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
     Ok(())
 }
 
-fn cmd_oneway(seed: &str, depth: usize, max_radius: usize) -> Result<()> {
+fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
     use std::time::Instant;
 
-    let seed_type = match seed.to_uppercase().as_str() {
-        "H" => tiling::metatile::MetatileType::H,
-        "T" => tiling::metatile::MetatileType::T,
-        "P" => tiling::metatile::MetatileType::P,
-        "F" => tiling::metatile::MetatileType::F,
-        _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
-    };
+    let system = tiling::systems::resolve_system(system_name)?;
+    let seed_idx = resolve_seed(&*system, seed)?;
 
     println!(
-        "One-way substitution analysis: seed={:?}, depth={}, max_radius={}\n",
-        seed_type, depth, max_radius
+        "One-way substitution analysis: system={}, seed={}, depth={}, max_radius={}\n",
+        system.name(),
+        system.type_name(seed_idx),
+        depth,
+        max_radius
     );
 
     let t0 = Instant::now();
-    let result = tiling::oneway::analyze(seed_type, depth, max_radius);
+    let result = tiling::oneway::analyze_system(&*system, seed_idx, depth, max_radius);
     let elapsed = t0.elapsed();
 
     // Hierarchy stats
@@ -623,19 +659,23 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize) -> Result<()> {
     Ok(())
 }
 
-fn cmd_vulnerability(depth: usize, erasure_trials: usize) -> Result<()> {
+fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> Result<()> {
     use std::time::Instant;
 
+    let system = tiling::systems::resolve_system(system_name)?;
+
     println!(
-        "Vulnerability analysis: depth={}, erasure_trials={}\n",
-        depth, erasure_trials
+        "Vulnerability analysis: system={}, depth={}, erasure_trials={}\n",
+        system.name(),
+        depth,
+        erasure_trials
     );
 
     let t0 = Instant::now();
-    let analysis = tiling::vulnerability::analyze(depth, erasure_trials);
+    let analysis = tiling::vulnerability::analyze_system(&*system, 0, depth, erasure_trials);
     let elapsed = t0.elapsed();
 
-    tiling::vulnerability::print_report(&analysis);
+    tiling::vulnerability::print_report(&*system, &analysis);
     println!("\nCompleted in {:?}", elapsed);
 
     Ok(())

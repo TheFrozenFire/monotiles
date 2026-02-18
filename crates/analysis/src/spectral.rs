@@ -39,8 +39,8 @@ pub fn spectre_substitution_matrix<F: Field>() -> Matrix<F> {
         2,
         2,
         vec![
-            f(7), f(6), // Spectre' = 7S + 6M... wait
-            f(1), f(1), // Mystic'  = 1S + 1M
+            f(7), f(1), // Spectre' = 7S + 1M
+            f(6), f(1), // Mystic'  = 6S + 1M
         ],
     )
 }

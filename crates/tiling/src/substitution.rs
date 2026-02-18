@@ -1,5 +1,8 @@
-use crate::metatile::{MetatileType, SUPERTILE_F_CHILDREN, SUPERTILE_H_CHILDREN,
-    SUPERTILE_P_CHILDREN, SUPERTILE_T_CHILDREN};
+use crate::metatile::{
+    MetatileType, SUPERTILE_F_CHILDREN, SUPERTILE_H_CHILDREN, SUPERTILE_P_CHILDREN,
+    SUPERTILE_T_CHILDREN,
+};
+use crate::systems::TilingSystem;
 
 /// A patch of metatiles at a given hierarchical level.
 #[derive(Clone, Debug)]
@@ -12,22 +15,49 @@ pub struct Patch {
 #[derive(Clone, Debug)]
 pub struct PatchTile {
     pub tile_type: MetatileType,
-    /// Index of this tile in the parent's child list (0-28 for level-1).
     pub child_index: usize,
 }
 
-/// Generate a level-n supertile by iterating the substitution from a seed.
+/// Generate type counts at each level for a generic tiling system.
 ///
-/// Starting from a single metatile of the given type, apply the substitution
-/// n times to produce a hierarchical patch. Returns the metatile type counts
-/// at each level.
-///
-/// The substitution rule: one H metatile inflates into a patch of 29 metatiles,
-/// grouped into H'(10) + T'(1) + P'(5) + F'(6) = 22 core + 7 boundary.
+/// Starting from a single tile of type `seed`, applies the substitution
+/// matrix `levels` times. Returns `levels + 1` count vectors.
+pub fn generate_counts_system(
+    system: &dyn TilingSystem,
+    seed: usize,
+    levels: usize,
+) -> Vec<Vec<usize>> {
+    let num_types = system.num_types();
+    let composition = system.composition();
+    let mut history = Vec::with_capacity(levels + 1);
+
+    let mut counts = vec![0usize; num_types];
+    counts[seed] = 1;
+    history.push(counts);
+
+    for _ in 0..levels {
+        let prev = history.last().unwrap();
+        let mut next = vec![0usize; num_types];
+
+        for i in 0..num_types {
+            if prev[i] == 0 {
+                continue;
+            }
+            for j in 0..num_types {
+                next[j] += prev[i] * composition[i][j];
+            }
+        }
+
+        history.push(next);
+    }
+
+    history
+}
+
+/// Generate type counts at each level for the hat tiling system.
 pub fn generate_counts(seed: MetatileType, level: usize) -> Vec<[usize; 4]> {
     let mut history = Vec::with_capacity(level + 1);
 
-    // Level 0: the seed
     let mut counts = [0usize; 4];
     counts[seed.index()] = 1;
     history.push(counts);
@@ -36,15 +66,12 @@ pub fn generate_counts(seed: MetatileType, level: usize) -> Vec<[usize; 4]> {
         return history;
     }
 
-    // The substitution matrix M where M[i][j] = number of type-j metatiles
-    // in the supertile of type i.
     let composition = crate::metatile::supertile_composition();
 
     for _ in 0..level {
         let prev = *history.last().unwrap();
         let mut next = [0usize; 4];
 
-        // Each type-i supertile contributes composition[i][j] metatiles of type j
         for i in 0..4 {
             if prev[i] == 0 {
                 continue;
@@ -100,7 +127,6 @@ mod tests {
     fn level_one_from_h() {
         let counts = generate_counts(MetatileType::H, 1);
         assert_eq!(counts.len(), 2);
-        // H inflates to H'(3H+1T+3P+3F)
         assert_eq!(counts[1], [3, 1, 3, 3]);
     }
 
@@ -131,7 +157,25 @@ mod tests {
     #[test]
     fn hat_count_level_one() {
         let hats = hat_counts(MetatileType::H, 1);
-        // H' = 3H + 1T + 3P + 3F = 3*4 + 1*1 + 3*2 + 3*2 = 25 hats
         assert_eq!(hats[1], 25);
+    }
+
+    #[test]
+    fn generic_matches_hat_specific() {
+        use crate::systems::hat::HatSystem;
+        let system = HatSystem::new();
+        for seed in MetatileType::all() {
+            let hat_counts = generate_counts(seed, 5);
+            let generic_counts = generate_counts_system(&system, seed.index(), 5);
+            for (level, (h, g)) in hat_counts.iter().zip(generic_counts.iter()).enumerate() {
+                assert_eq!(
+                    &h[..],
+                    &g[..],
+                    "seed {:?} level {} mismatch",
+                    seed,
+                    level
+                );
+            }
+        }
     }
 }

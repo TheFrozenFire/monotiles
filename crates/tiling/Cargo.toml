@@ -8,6 +8,7 @@ license.workspace = true
 domain.workspace = true
 ark-ff.workspace = true
 ark-std.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
