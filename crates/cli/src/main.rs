@@ -91,6 +91,19 @@ enum Commands {
         system: String,
     },
 
+    /// Analyze the local-to-global gap (seed distinguishability)
+    Gap {
+        /// Hierarchy depth (substitution levels)
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        /// Maximum neighborhood radius to test
+        #[arg(short = 'r', long, default_value_t = 5)]
+        max_radius: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Analyze recoverability vulnerability (per-position criticality, erasure thresholds)
     Vulnerability {
         /// Hierarchy depth (substitution levels)
@@ -121,6 +134,7 @@ fn main() -> Result<()> {
         Commands::Deflate { seed, levels } => cmd_deflate(&seed, levels),
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
         Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
+        Commands::Gap { depth, max_radius, system } => cmd_gap(depth, max_radius, &system),
         Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
     }
 }
@@ -655,6 +669,28 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
             max_full_radius
         );
     }
+
+    Ok(())
+}
+
+fn cmd_gap(depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
+    use std::time::Instant;
+
+    let system = tiling::systems::resolve_system(system_name)?;
+
+    println!(
+        "Local-to-global gap analysis: system={}, depth={}, max_radius={}\n",
+        system.name(),
+        depth,
+        max_radius
+    );
+
+    let t0 = Instant::now();
+    let analysis = tiling::gap::analyze_system(&*system, depth, max_radius);
+    let elapsed = t0.elapsed();
+
+    tiling::gap::print_report(&*system, &analysis);
+    println!("\nCompleted in {:?}", elapsed);
 
     Ok(())
 }

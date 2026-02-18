@@ -1,5 +1,6 @@
 pub mod adjacency;
 pub mod deflation;
+pub mod gap;
 pub mod geometry;
 pub mod metatile;
 pub mod oneway;
