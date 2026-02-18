@@ -136,3 +136,19 @@ The root cause is **type-level diversity**. More types with heterogeneous compos
 **The no-reflection property compounds this.** Hat requires mirror tiles — a valid hat tiling admits local chirality choices. A prover constructing a fake hat hierarchy has some freedom to vary chirality locally without invalidating the hierarchy. Spectre tiles without reflections: every tile is the same handedness, and the orientation constraints are globally consistent. This removes a degree of freedom that a cheating prover could otherwise exploit. Spectre's geometric rigidity translates directly to commitment rigidity.
 
 **The plateau behavior hints at a threshold access structure.** Spectre's determined% collapses from 100% to ~50% at just 10% erasure, then holds flat (~38-44%) through 20-70% erasure. This is not gradual degradation — it is a sharp threshold followed by a stable floor. Compared to secret sharing: you need ~90% of tiles to determine the hierarchy; below that you immediately lose roughly half of all type information and further loss changes little. Whether this threshold can be sharpened and the floor driven toward zero (making it a true (k,n) threshold structure) is an open question.
+
+## Sibling Swaps Have Zero Cascade Cost — By a Combinatorial Identity (#32)
+
+When you discover that a confusable sibling pair exists (two supertiles of types A and B sharing a parent, where B = A + 1 tile of `differing_type`), the natural next question is: does swapping their labels cascade upward? Do you have to relabel their parent too?
+
+The answer is no, and the reason is a combinatorial identity so simple it's easy to miss.
+
+**The swap operation.** A and B are siblings — children of the same parent P. B's composition is A's composition plus one extra tile of `differing_type`. To convert A→B and B→A: move one `differing_type` tile from B's child set to A's child set. A now has B's old composition, so it gets relabeled B. B now has A's old composition, so it gets relabeled A.
+
+**Why the parent is unaffected.** Before the swap, P's child list contains (among other things) one instance of type A and one instance of type B. After the swap, P's child list contains one instance of type B (formerly A) and one instance of type A (formerly B). The *multiset* of child types is unchanged — it still has one A and one B. P's composition hasn't changed, so P's type doesn't change, so P's parent is unaffected, and so on all the way up.
+
+**The identity.** Swapping two labeled elements in a multiset preserves the multiset. This is not a property of tilings specifically — it's true of any labeled collection. The cascade cost is zero because the swap is a permutation of labels on a fixed child set, not an addition or removal of elements.
+
+**Why this is non-obvious.** It feels like changing two children's types should change the parent's composition, because "composition" tracks type counts. But the swap is symmetric: A loses one child and gains one child of the same net effect on the parent's count of A-labeled children (−1 becomes a B), and the parent's count of B-labeled children (+1 a new B, but −1 because B lost a label to A). The +1 and −1 cancel exactly.
+
+**The practical implication.** This means the modification distance for sibling swaps is determined entirely by the structure at the level of the swapped pair, not by the density of dependencies above them. No matter how deeply entangled the hierarchy is above level k, a sibling swap at level k costs exactly 1 and propagates zero levels upward. The dense cascade structure of spectre (which gives it superior tamper detection against *random* erasure) provides no defense against this *adversarial* one-move attack on the combinatorial structure.

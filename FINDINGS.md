@@ -454,3 +454,68 @@ The geometric constraint reveals a strict hierarchy of adversarial models:
 Spectre is **strictly more resistant** to geometrically-constrained adversaries. Hat's 7 boundary children — a structural "glue" artifact of its inflation rule — are its geometric weak point. Spectre eliminated this artifact: every inflation child is fully owned, leaving no ambiguous tile at shared boundaries.
 
 This is a concrete separation: any adversary who must move a physically-present tile (rather than relabel an abstract child index) cannot attack spectre at cost 1. Hat remains vulnerable.
+
+## Swap Opportunity Scaling with Depth (#29)
+
+The number of sibling confusable-pair instances grows exponentially with hierarchy depth at a rate matching the dominant eigenvalue of the substitution matrix.
+
+### Hat (P'↔F' pair, seed=H)
+
+| Depth | Level 1 | Level 2 | Level 3 | Level 4 | Level 5 | Total |
+|-------|---------|---------|---------|---------|---------|-------|
+| 2     | 9       | —       | —       | —       | —       | 9     |
+| 3     | 42      | 9       | —       | —       | —       | 51    |
+| 4     | 300     | 42      | 9       | —       | —       | 351   |
+| 5     | 2,037   | 300     | 42      | 9       | —       | 2,388 |
+| 6     | 13,974  | 2,037   | 300     | 42      | 9       | 16,362 |
+
+Level-1 growth ratio: 300/42 ≈ 7.14, 2037/300 ≈ 6.79, 13974/2037 ≈ **6.86** → converges to the hat dominant eigenvalue (~6.86).
+
+### Spectre (Mystic'↔Spectre' pair, seed=Spectre)
+
+| Depth | Level 1 | Level 2 | Level 3 | Level 4 | Level 5 | Total  |
+|-------|---------|---------|---------|---------|---------|--------|
+| 2     | 7       | —       | —       | —       | —       | 7      |
+| 3     | 55      | 7       | —       | —       | —       | 62     |
+| 4     | 433     | 55      | 7       | —       | —       | 495    |
+| 5     | 3,409   | 433     | 55      | 7       | —       | 3,904  |
+| 6     | 26,839  | 3,409   | 433     | 55      | 7       | 30,743 |
+
+Level-1 growth ratio: 433/55 ≈ 7.87, 3409/433 ≈ 7.87, 26839/3409 ≈ **7.87** → converges to the spectre dominant eigenvalue (~7.87).
+
+### Key observations
+
+**Telescoping structure.** The count at level k for depth d equals the count at level k for any depth d' > k. The per-level sequence is fixed; deeper hierarchies simply prepend a new, larger level-1 count. This means the "opportunity surface" is determined entirely by the substitution matrix, not by the total hierarchy depth.
+
+**Eigenvalue-rate growth.** Both systems' swap counts grow at the dominant substitution eigenvalue rate. This makes structural sense: the number of confusable sibling pairs at level k is proportional to the number of supertile pairs at level k+1, which is proportional to the dominant eigenvector component scaled by λ^(depth−k).
+
+**Modification distance is depth-independent.** Despite swap counts growing exponentially (from 9 at depth 2 to 16,362 at depth 6 for hat), the minimum modification distance remains 1 at all depths. Increasing depth adds attack surface, never hardens it.
+
+**Spectre has more opportunities per level than hat.** At level 1, spectre has ~55% more instances than hat at depth 3 (55 vs 42) and ~92% more at depth 4 (433 vs 300). This reflects spectre's 8-child Spectre' supertile producing more sibling-pair opportunities per parent than hat's 5/6-child P'/F'.
+
+## Algebraic IOP Is Blind to Sibling Swaps (#31)
+
+The tiling IOP accepts any valid hierarchy, including hierarchies produced by sibling swaps. Two distinct hierarchies H and H' — where H' is obtained by swapping a P'/F' sibling pair and reassigning one child — both produce valid, accepted proofs. The IOP cannot distinguish between them.
+
+### Test result
+
+`iop_accepts_sibling_swapped_hierarchy` passes: the verifier accepts fresh proofs for both the original hierarchy and the sibling-swapped version. The two hierarchies differ at level 1 (different tile type assignments), confirming the swap genuinely changes the hierarchy.
+
+### Why the IOP cannot detect this
+
+The IOP's soundness guarantee is: **for a given commitment, the prover cannot cheat**. It does NOT guarantee uniqueness of the committed hierarchy. The IOP verifies:
+1. Merkle proofs for each queried supertile and its children
+2. That child type counts match the claimed supertile composition
+3. That the fold (linear combination of children by challenge) equals the committed supertile value
+
+All three checks hold for H'. The swapped hierarchy is genuinely valid:
+- H' has the same base values (level 0 unchanged)
+- At level 1, A now has F'-composition children and B has P'-composition children
+- Fold values at levels 1 and above are recomputed from scratch for H'
+- All Merkle trees are rebuilt for H'
+
+The prover generates a completely honest proof for H'. No check fails. **The IOP cannot enforce that a given base-level commitment corresponds to exactly one supertile labeling.**
+
+### Implication
+
+The IOP proves "there exists a valid hierarchy consistent with this commitment." It does not prove "this is the unique canonical hierarchy for the underlying tiling." For applications that require canonical labeling (e.g., proving a specific spatial layout, or that two parties committed to the same hierarchy), the IOP must be augmented with a uniqueness argument. The geometric modification distance finding (#30) suggests spectre is harder to attack geometrically, but the algebraic IOP remains blind to algebraic swaps for both systems.
