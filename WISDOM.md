@@ -105,6 +105,14 @@ The minimum determining set for H' is a single tile: the T at position 3. This w
 
 In contrast, P' and F' require all their children because they differ by only one F-tile and share all other child types. The determining set size is controlled by the confusability structure, not the supertile size.
 
+## Spectre's Dependency Structure Stabilizes at Depth 2, but Erasure Behavior Does Not
+
+The spectre dependency graph (edges-per-tile, degree-0 fraction, max chain length) reaches a fixed point at depth 2 and does not change at depths 3 or 4. You might expect erasure behavior to similarly stabilize — but it doesn't. The plateau level keeps falling geometrically (100% → 87% → 42% → 7.5%) even as the local graph structure is constant.
+
+The reason: erasure is a *global* propagation process, not a local one. Even though each tile's immediate neighborhood looks the same at every depth, the *number of hierarchy levels* a missing tile's absence must propagate through grows with depth. At depth 4 there are four levels of supertile ambiguity stacked above any erased tile; at depth 1 there is only one. The local structure is the same; the global cascade depth is not.
+
+This is a general principle: when analyzing hierarchical structures, local graph properties (degree, connectivity) do not predict global erasure behavior. You need to measure at multiple depths to characterize the asymptotic regime.
+
 ## The Correcting/Detecting Spectrum Is Algebraic, Not Geometric
 
 Hat and hat-turtle produce identical vulnerability results to the decimal place — same erasure threshold, same dependency graph, same confusable pairs, same minimum determining sets. They use different tile shapes (hat vs turtle) but share the same substitution matrix.

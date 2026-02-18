@@ -151,6 +151,48 @@ The "Determined %" exceeds "Surviving %" at erasure fractions above ~45% — mea
 
 The recovery dependency graph (radius 1) has 360 edges, cycles, and a bimodal in-degree distribution: 370 tiles with degree 0 (self-determined) and 72 tiles with degree 5 (dependent on all siblings). Maximum chain length is 4.
 
+## Spectre Erasure Plateau Collapses with Depth (#23)
+
+The spectre system's erasure resilience degrades sharply with hierarchy depth. The plateau level (determined% at mid-range erasure) falls geometrically, and the threshold location shifts toward lower erasure rates.
+
+### Erasure sweep by depth (spectre, 100 trials)
+
+| Erasure % | Depth 1 (8 tiles) | Depth 2 (63 tiles) | Depth 3 (496 tiles) | Depth 4 (3905 tiles) |
+|-----------|------------------|-------------------|--------------------|--------------------|
+| 10% | 100.0% | 73.4% | 50.1% | 46.8% |
+| 20% | 100.0% | 80.7% | 38.4% | 23.2% |
+| 30% | 100.0% | 84.1% | 38.2% | 10.8% |
+| 40% | 100.0% | 85.0% | 39.6% | 8.5% |
+| 50% | 100.0% | 87.2% | 42.6% | 7.6% |
+| 60% | 100.0% | 85.6% | 44.1% | 7.2% |
+| 70% | 100.0% | 86.5% | 44.2% | 6.9% |
+| 80% | 100.0% | 79.2% | 38.0% | 7.4% |
+| 90% | 100.0% | 73.7% | 34.5% | 8.1% |
+| Phase transition | ~90-100% | ~90-100% | ~10-20% | **~0-10%** |
+
+### Summary of structural metrics by depth
+
+| Depth | Base tiles | Dep. edges | Edges/tile | Degree-0 % | Max chain |
+|-------|-----------|-----------|-----------|-----------|-----------|
+| 1 | 8 | 0 | 0.00 | 100% | 0 |
+| 2 | 63 | 343 | 5.44 | 22.2% | 8 |
+| 3 | 496 | 2,695 | 5.43 | 22.4% | 8 |
+| 4 | 3,905 | 21,217 | 5.43 | 22.4% | 8 |
+
+The dependency graph structure **stabilizes at depth 2**: edges-per-tile, degree-0 fraction, and max chain length are all constant from depth 2 onward. This is a fixed-point of the substitution structure.
+
+### Two anomalies worth noting
+
+**Depth 1 is perfectly resilient.** At depth 1 (a single Spectre'/Mystic' supertile, 8 base tiles), the dependency graph has zero edges and every tile is degree-0. All tiles stay fully determined under any partial erasure (up to 90%). The tiling is trivially recoverable because there is only one supertile and all children collectively identify it.
+
+**Depth 2 inverts the relationship.** Determined% *exceeds* surviving% across nearly the full erasure range (e.g., 87.2% determined at 50% erasure vs 49.2% surviving). The hierarchy does real recovery work — partial context is enough to reconstruct more than survives. This is the correcting-code regime. By depth 3 the relationship inverts, and by depth 4 it collapses entirely.
+
+### The threshold sharpens with depth
+
+At depth 4, losing just 10% of tiles immediately reduces determined% to 46.8%; losing 20% drops it to 23.2%; from 30% onward it plateaus near 7-8%. The system is converging toward a **true threshold structure**: below a ~90% survival rate, almost nothing is determinable. This is the opposite of the error-correcting code property — it is an all-or-nothing information lock.
+
+The plateau level progression (100% → 87% → 42% → 7.5%) is consistent with exponential decay per depth level. If the trend continues, depth 5 would yield a plateau near ~1-2%, and depth 6 near ~0%. A depth-5 or depth-6 spectre hierarchy would approach a true (k,n) threshold scheme where k ≈ 0.90n tiles are needed to determine anything at all.
+
 ## Hat-Turtle Is Identical to Hat on the Correcting/Detecting Spectrum (#22)
 
 Hat-turtle produces identical vulnerability results to hat on every measurable metric, to the decimal place.
