@@ -613,3 +613,58 @@ Therefore, the only cost-1 zero-cascade modifications are sibling swaps between 
 | Root modification | **≥depth** | **depth** | Change the seed type propagates all the way down |
 
 The landscape is gapped: there is no modification with cost strictly between 1 and 2. The set of reachable valid hierarchies from any given H is partitioned into: H itself (cost 0), and hierarchies at distance 1 (all sibling-swap variants, exponentially many of them), with a gap before any distance-2 modifications.
+
+## IOP Canonical Form Defense: Zero-Cost Enforcement (#33)
+
+The IOP verifier can be upgraded to enforce canonical hierarchy labeling at zero extra proof size and O(children_per_query) extra verification cost.
+
+### Canonical form definition
+
+**Inflation-order canonical**: each child's type at every parent-child edge must match the type the inflation rule specifies for that *position* in the parent's child list.
+
+```
+children[i].child_type == inflation_child_type(supertile_children(parent_type)[i])
+```
+
+The standard top-down inflation hierarchy satisfies this by construction. Any sibling swap violates it: the child at a P'-slot now has F'-type (or vice versa).
+
+### Inflation sequences (both systems, confirmed deterministic)
+
+**Hat (all 4 types have deterministic sequences):**
+
+| Parent | Children sequence |
+|--------|------------------|
+| H' (10 children) | H, H, H, T, P, F, P, F, P, F |
+| T' (1 child) | H |
+| P' (5 children) | F, H, P, H, F |
+| F' (6 children) | F, H, P, H, F, F |
+
+**Spectre (both types have deterministic sequences):**
+
+| Parent | Children sequence |
+|--------|------------------|
+| Spectre' (8 children) | Spectre, Spectre, Spectre, Spectre, Spectre, Spectre, Spectre, Mystic |
+| Mystic' (7 children) | Spectre, Spectre, Spectre, Spectre, Spectre, Spectre, Mystic |
+
+### IOP enforcement cost
+
+| Metric | Hat | Spectre |
+|--------|-----|---------|
+| Extra Merkle proofs per query | **0** | **0** |
+| Extra scalar comparisons per child | 1 | 1 |
+| Avg children checked per query | 5.5 | 7.5 |
+| Confusable-type tile fraction | 59.1% | 100.0% |
+
+### How it detects swaps
+
+After a P'↔F' swap:
+- Hat: the F'-labeled tile presents P'-slot children `[F, H, P, H, F]` (5 children) instead of the F'-slot sequence `[F, H, P, H, F, F]` (6 children) — position check FAILS at position 5
+- Spectre: the Spectre'-labeled tile presents Mystic'-slot children (7 children) instead of the Spectre'-slot sequence (8 children) — position check FAILS at position 7
+
+### Relationship to existing composition check
+
+The existing IOP composition (multiset) check verifies the right *counts* of each child type. The canonical check verifies the right *sequence*. Canonical is strictly stronger: a passed canonical check implies a passed composition check, but not vice versa.
+
+### Conclusion
+
+The canonical form check eliminates the IOP blindness demonstrated in #31 with no proof size increase and O(children_per_query) extra work per verification round. Both hat and spectre inflation rules are fully deterministic, making the canonical check well-defined for both systems.

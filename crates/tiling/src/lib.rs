@@ -1,4 +1,5 @@
 pub mod adjacency;
+pub mod canonical;
 pub mod deflation;
 pub mod gap;
 pub mod geometry;
