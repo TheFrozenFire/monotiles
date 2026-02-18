@@ -116,6 +116,19 @@ enum Commands {
         #[arg(short = 'S', long, default_value = "hat")]
         system: String,
     },
+
+    /// Explore Cucaracha-based group cryptography problems
+    GroupCrypto {
+        /// Experiment to run: all, recovery, decomposition, stabilizer
+        #[arg(short, long, default_value = "all")]
+        experiment: String,
+        /// Maximum cotiler size to test
+        #[arg(short = 'n', long, default_value_t = 5)]
+        max_size: usize,
+        /// Number of trials per size
+        #[arg(short, long, default_value_t = 10)]
+        trials: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -136,6 +149,7 @@ fn main() -> Result<()> {
         Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
         Commands::Gap { depth, max_radius, system } => cmd_gap(depth, max_radius, &system),
         Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
+        Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
     }
 }
 
@@ -749,5 +763,23 @@ fn cmd_fields() -> Result<()> {
     println!("  FrSqrt15 inverse round-trip: {}", b * b_inv == FrSqrt15::ONE);
 
     println!("\nAll field properties verified.");
+    Ok(())
+}
+
+fn cmd_group_crypto(experiment: &str, max_size: usize, trials: usize) -> Result<()> {
+    use std::time::Instant;
+
+    println!(
+        "Group cryptography analysis: experiment={}, max_size={}, trials={}\n",
+        experiment, max_size, trials
+    );
+
+    let t0 = Instant::now();
+    let analysis = domain::group_crypto::analyze_experiments(max_size, trials, experiment);
+    let elapsed = t0.elapsed();
+
+    domain::group_crypto::print_report(&analysis);
+    println!("\nCompleted in {:?}", elapsed);
+
     Ok(())
 }

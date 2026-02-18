@@ -173,7 +173,7 @@ impl Cotiler {
 ///
 /// At each step, every cell in the set is composed with each Coxeter generator
 /// (and its inverse), expanding the frontier.
-fn expand_by_generators(cells: &HashSet<CoxeterElement>, n: usize) -> HashSet<CoxeterElement> {
+pub fn expand_by_generators(cells: &HashSet<CoxeterElement>, n: usize) -> HashSet<CoxeterElement> {
     let generators = [
         CoxeterElement::generator(Generator::Alpha),
         CoxeterElement::generator(Generator::Beta),
