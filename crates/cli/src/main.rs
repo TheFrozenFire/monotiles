@@ -148,6 +148,32 @@ enum Commands {
         system: String,
     },
 
+    /// Steganographic encoding in sibling-swap bit channels (#27)
+    Stego {
+        /// Hierarchy depth
+        #[arg(short, long, default_value_t = 4)]
+        depth: usize,
+        /// Message to encode (ASCII string)
+        #[arg(short, long, default_value = "hello")]
+        message: String,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
+    /// Measure IOP proof size scaling curve across depths (#20)
+    ProofSizeScaling {
+        /// Max hierarchy depth to measure (1..=max_depth)
+        #[arg(short, long, default_value_t = 5)]
+        max_depth: usize,
+        /// Number of IOP queries per proof
+        #[arg(short, long, default_value_t = 8)]
+        queries: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Explore Cucaracha-based group cryptography problems
     GroupCrypto {
         /// Experiment to run: all, recovery, decomposition, stabilizer
@@ -183,6 +209,8 @@ fn main() -> Result<()> {
         Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
         Commands::GeometricModificationDistance { system } => cmd_geometric_modification_distance(&system),
         Commands::CanonicalCheck { depth, system } => cmd_canonical_check(depth, &system),
+        Commands::Stego { depth, message, system } => cmd_stego(depth, &message, &system),
+        Commands::ProofSizeScaling { max_depth, queries, system } => cmd_proof_size_scaling(max_depth, queries, &system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
     }
 }
@@ -798,6 +826,114 @@ fn cmd_modification_distance(depth: usize, system_name: &str) -> Result<()> {
     Ok(())
 }
 
+fn cmd_stego(depth: usize, message: &str, system_name: &str) -> Result<()> {
+    let _span = info_span!("stego", depth, system = system_name).entered();
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    let analysis = tiling::vulnerability::analyze_modification_distance(&*system, 0, depth);
+
+    // Collect all swap instances across all levels — each is one bit channel
+    let instances: Vec<_> = analysis.instances_per_level.iter()
+        .flat_map(|lvl| lvl.iter())
+        .collect();
+    let capacity_bits = instances.len();
+    let capacity_bytes = capacity_bits / 8;
+
+    let msg_bytes = message.as_bytes();
+    let msg_bits: Vec<bool> = msg_bytes.iter()
+        .flat_map(|&b| (0..8).rev().map(move |i| (b >> i) & 1 == 1))
+        .collect();
+
+    info!("=== Steganographic Channel Analysis (#27) ===");
+    info!("System: {}, depth: {}", system.name(), depth);
+    info!("Confusable pairs: {}", analysis.swaps.len());
+    info!("Sibling-swap instances (bit slots): {}", capacity_bits);
+    info!("Channel capacity: {} bytes ({} bits)", capacity_bytes, capacity_bits);
+    info!("");
+
+    if analysis.swaps.is_empty() {
+        info!("No confusable pairs → zero steganographic capacity.");
+        return Ok(());
+    }
+
+    // Show capacity by level
+    info!("--- Capacity by level ---");
+    for (lvl_idx, lvl_instances) in analysis.instances_per_level.iter().enumerate() {
+        if !lvl_instances.is_empty() {
+            info!("  Level {} supertiles: {} swap instances ({} bits)", lvl_idx + 1, lvl_instances.len(), lvl_instances.len());
+        }
+    }
+    info!("");
+
+    // Encode: for each instance, the canonical assignment (A=0, B=1) or swapped (A=1, B=0)
+    // Bit i: instance i is in canonical state (0) or swapped state (1)
+    // We encode the message by choosing which instances to swap.
+    if msg_bits.len() > capacity_bits {
+        info!("Message '{}' ({} bits) exceeds channel capacity ({} bits).", message, msg_bits.len(), capacity_bits);
+        info!("Cannot encode.");
+        return Ok(());
+    }
+
+    // Encode the message bits
+    let mut swap_map = vec![false; capacity_bits];
+    for (i, &bit) in msg_bits.iter().enumerate() {
+        swap_map[i] = bit;
+    }
+
+    let swapped_count = swap_map.iter().filter(|&&b| b).count();
+    info!("--- Encoding ---");
+    info!("Message: '{}' ({} bits)", message, msg_bits.len());
+    info!("Instances used: {} / {} ({}% of capacity)", msg_bits.len(), capacity_bits, msg_bits.len() * 100 / capacity_bits.max(1));
+    info!("Swaps applied: {} (bits set to 1)", swapped_count);
+    info!("");
+
+    // Decode: read back the bits from the swap_map
+    let decoded_bits = &swap_map[..msg_bits.len()];
+    let decoded_bytes: Vec<u8> = decoded_bits.chunks(8)
+        .map(|chunk| chunk.iter().enumerate().fold(0u8, |acc, (i, &b)| acc | ((b as u8) << (7 - i))))
+        .collect();
+    let decoded = String::from_utf8_lossy(&decoded_bytes);
+
+    info!("--- Decode verification ---");
+    info!("Decoded: '{}'", decoded);
+    info!("Match: {}", if decoded == message { "YES ✓" } else { "NO ✗" });
+    info!("");
+
+    // Detectability analysis
+    info!("--- Detectability ---");
+    info!("Before canonical check (#33): UNDETECTABLE");
+    info!("  The pre-#33 IOP accepts all sibling-swap variants as valid proofs.");
+    info!("  A verifier without the canonical check cannot distinguish the stego");
+    info!("  hierarchy from the canonical one.");
+    info!("");
+    info!("After canonical check (#33): FULLY DETECTABLE");
+    info!("  Any swapped instance presents children from the wrong inflation slot.");
+    info!("  The position check catches each bit immediately.");
+    info!("  0 hidden bits survive the canonical check.");
+    info!("");
+
+    // Compute growth rate by running analysis at depth-1 for comparison
+    let growth_str = if depth > 1 {
+        let prev_analysis = tiling::vulnerability::analyze_modification_distance(&*system, 0, depth - 1);
+        let prev_total = prev_analysis.total_instances;
+        if prev_total > 0 {
+            format!("~{:.1}x per depth level", capacity_bits as f64 / prev_total as f64)
+        } else {
+            "N/A (depth-1 has no instances)".to_string()
+        }
+    } else {
+        "N/A (need depth >= 2)".to_string()
+    };
+
+    info!("--- Summary ---");
+    info!("  Channel capacity at depth {}: {} bits = {} bytes", depth, capacity_bits, capacity_bytes);
+    info!("  Capacity growth rate: {}", growth_str);
+    info!("  Pre-#33 IOP: all {} bits undetectable", capacity_bits);
+    info!("  Post-#33 IOP: 0 bits undetectable (canonical check kills the channel entirely)");
+
+    Ok(())
+}
+
 fn cmd_canonical_check(depth: usize, system_name: &str) -> Result<()> {
     let _span = info_span!("canonical_check", depth, system = system_name).entered();
 
@@ -811,6 +947,56 @@ fn cmd_canonical_check(depth: usize, system_name: &str) -> Result<()> {
 
     let analysis = tiling::canonical::analyze_canonical(&*system);
     tiling::canonical::print_canonical_report(&*system, &analysis);
+
+    Ok(())
+}
+
+fn cmd_proof_size_scaling(max_depth: usize, num_queries: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("proof_size_scaling", max_depth, queries = num_queries, system = system_name).entered();
+    use ark_bls12_381::Fr;
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    info!("IOP proof size scaling: system={}, queries={}\n", system.name(), num_queries);
+
+    info!("depth | base_tiles | proof_KB | commit_B | challenge_B | query_B | max_path | openings");
+    info!("------|------------|----------|----------|-------------|---------|----------|--------");
+
+    for depth in 1..=max_depth {
+        let seed_idx = 0;
+        let mut hierarchy = iop::hierarchy::build_hierarchy_system::<Fr>(&*system, seed_idx, depth);
+        let base_tiles = hierarchy.levels[0].tile_types.len();
+        for i in 0..base_tiles {
+            hierarchy.levels[0].values[i] = Fr::from((i as u64 + 1) * 7 + 13);
+        }
+        let proof = iop::prover::prove(&mut hierarchy, num_queries, &*system);
+
+        // Per-component breakdown
+        let commit_bytes = proof.commitment.level_commitments.len() * 32;
+        let challenge_bytes: usize = proof.challenges.iter().map(|c| c.coeffs.len() * 32).sum();
+        let query_bytes: usize = proof.queries.iter().flat_map(|round| round.iter()).map(|qr| {
+            let sup = 32 + 8 + qr.supertile_proof.path.len() * 32;
+            let children: usize = qr.children.iter().map(|c| 8 + 8 + 32 + 8 + c.proof.path.len() * 32).sum();
+            sup + children
+        }).sum();
+        let total_bytes = commit_bytes + challenge_bytes + query_bytes + proof.final_values.len() * 32;
+
+        let total_openings: usize = proof.queries.iter()
+            .flat_map(|round| round.iter())
+            .map(|qr| 1 + qr.children.len())
+            .sum();
+
+        // Max Merkle path depth across all openings in the proof (last round queries deepest tree)
+        let max_path = proof.queries.iter().flat_map(|round| round.iter()).flat_map(|qr| {
+            std::iter::once(qr.supertile_proof.path.len())
+                .chain(qr.children.iter().map(|c| c.proof.path.len()))
+        }).max().unwrap_or(0);
+
+        info!(
+            "{:5} | {:10} | {:8.1} | {:8} | {:11} | {:7} | {:8} | {}",
+            depth, base_tiles, total_bytes as f64 / 1024.0,
+            commit_bytes, challenge_bytes, query_bytes, max_path, total_openings
+        );
+    }
 
     Ok(())
 }

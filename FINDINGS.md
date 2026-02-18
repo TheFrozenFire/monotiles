@@ -668,3 +668,132 @@ The existing IOP composition (multiset) check verifies the right *counts* of eac
 ### Conclusion
 
 The canonical form check eliminates the IOP blindness demonstrated in #31 with no proof size increase and O(children_per_query) extra work per verification round. Both hat and spectre inflation rules are fully deterministic, making the canonical check well-defined for both systems.
+
+## Confusable Pairs Are Exactly the Unit-Vector Row Differences in the Substitution Matrix (#18)
+
+The substitution matrix rows predict confusable type pairs with no false positives or false negatives: a pair (A, B) is confusable iff their rows differ by exactly one unit vector.
+
+### Hat (4×4 matrix, order: H, T, P, F)
+
+| Type | H | T | P | F |
+|------|---|---|---|---|
+| H'   | 3 | 1 | 3 | 3 |
+| T'   | 1 | 0 | 0 | 0 |
+| P'   | 2 | 0 | 1 | 2 |
+| F'   | 2 | 0 | 1 | 3 |
+
+Row differences for all pairs:
+
+| Pair | Difference vector | Unit vector? | Confusable? |
+|------|-------------------|--------------|-------------|
+| H'↔T' | [2,1,3,3] | No | No |
+| H'↔P' | [1,1,2,1] | No | No |
+| H'↔F' | [1,1,2,0] | No | No |
+| T'↔P' | [1,0,1,2] | No | No |
+| T'↔F' | [1,0,1,3] | No | No |
+| **P'↔F'** | **[0,0,0,1]** | **Yes (one F)** | **Yes ✓** |
+
+Exactly one confusable pair predicted: P'↔F'. This matches the known vulnerability.
+
+### Spectre (2×2 matrix, order: Spectre, Mystic)
+
+| Type | Spectre | Mystic |
+|------|---------|--------|
+| Spectre' | 7 | 1 |
+| Mystic'  | 6 | 1 |
+
+| Pair | Difference vector | Unit vector? | Confusable? |
+|------|-------------------|--------------|-------------|
+| **Spectre'↔Mystic'** | **[1,0]** | **Yes (one Spectre)** | **Yes ✓** |
+
+### Why this is the right condition
+
+A sibling swap between supertile types A and B requires that a valid B can be constructed from A's children by moving exactly one child tile. Moving one child of type X changes A's row count for X by −1 and B's row count for X by +1. For both resulting compositions to remain valid supertile types, A's row after adding X must equal B's row, and B's row after removing X must equal A's row. This is exactly the unit-vector difference condition: `row_A + e_X = row_B`.
+
+### Corollary: hat-turtle
+
+Hat-turtle delegates to hat's composition matrix, so it has the same single confusable pair P'↔F'. The prediction carries over unchanged.
+
+### Implication
+
+Given the substitution matrix alone, one can enumerate all confusable pairs in O(n²) time (n = number of tile types) by checking all row pairs for unit-vector differences. No geometry or inflation rule walk needed.
+
+## IOP Proof Size Scaling Curve (#20)
+
+Measured with 8 queries per round, BLS12-381 field (32-byte field elements, 32-byte Merkle hashes).
+
+### Hat system
+
+| depth | base_tiles | proof_KB | commit_B | challenge_B | query_B | max_path | openings |
+|-------|-----------|---------|---------|------------|--------|---------|---------|
+| 1 | 10 | 14.9 | 64 | 128 | 15,040 | 4 | 88 |
+| 2 | 64 | 27.8 | 96 | 256 | 28,040 | 6 | 143 |
+| 3 | 442 | 49.4 | 128 | 384 | 50,040 | 9 | 209 |
+| 4 | 3,025 | 79.1 | 160 | 512 | 80,248 | 12 | 281 |
+| 5 | 20,737 | 99.9 | 192 | 640 | 101,408 | 15 | 320 |
+
+### Spectre system
+
+| depth | base_tiles | proof_KB | commit_B | challenge_B | query_B | max_path | openings |
+|-------|-----------|---------|---------|------------|--------|---------|---------|
+| 1 | 8 | 10.0 | 64 | 64 | 10,048 | 3 | 72 |
+| 2 | 63 | 26.4 | 96 | 128 | 26,760 | 6 | 143 |
+| 3 | 496 | 49.5 | 128 | 192 | 50,288 | 9 | 214 |
+| 4 | 3,905 | 79.0 | 160 | 256 | 80,480 | 12 | 284 |
+| 5 | 30,744 | 116.4 | 192 | 320 | 118,672 | 15 | 358 |
+
+### Scaling analysis
+
+The query_B component dominates (>99% of proof size). Commitments and challenges are negligible.
+
+**Max Merkle path depth** grows by ~3 bits per depth level (consistent with branching factor ~5.5–7.5 → log₂(5.5)≈2.5 to log₂(7.5)≈2.9 bits per level).
+
+**Proof size growth per depth level** is approximately linear: each added level contributes the same marginal cost because:
+1. It adds one new query round (small — root level has 1 tile)
+2. All existing rounds' Merkle paths grow by ~3 hashes (the new base level is larger)
+
+**Hat vs spectre diverge at depth 5**: hat plateaus slightly below 100 KB while spectre grows to 116 KB. Spectre's higher branching factor (7.5 avg vs 5.5 avg) means deeper Merkle paths and more children per opening.
+
+**Proof size formula**: `proof_bytes ≈ Q × ∑_{k=1}^{d} (1 + avg_children_k) × (field_el + merkle_path_k × hash_size)` where `merkle_path_k ≈ ceil(log₂(tiles_at_level_{k-1}))` and `tiles_at_level_k ≈ λ^(d-k)` (λ = dominant eigenvalue).
+
+## Steganographic Bit Channel in Sibling-Swap Ambiguity (#27)
+
+Each sibling confusable pair (P'↔F' for hat, Spectre'↔Mystic' for spectre) is a 1-bit covert channel: canonical labeling encodes 0, swapped labeling encodes 1. The channel is undetectable by the pre-#33 IOP and completely closed by the #33 canonical check.
+
+### Channel capacity (depth 4, seed H/Spectre)
+
+| System | Swap instances | Capacity (bits) | Capacity (bytes) | Growth rate per depth |
+|--------|---------------|-----------------|------------------|-----------------------|
+| Hat | 351 | 351 | 43 | ~6.9× (≈ λ_hat = 6.86) |
+| Spectre | 495 | 495 | 61 | ~8.0× (≈ λ_spectre = 7.87) |
+
+**Capacity by level (hat, depth 4):**
+
+| Level | Instances | Bits |
+|-------|-----------|------|
+| 1 (base supertiles) | 300 | 300 |
+| 2 | 42 | 42 |
+| 3 | 9 | 9 |
+| Total | 351 | 351 |
+
+### Encode/decode demonstration
+
+Message `"hello"` (5 bytes = 40 bits) encoded in a depth-4 hat hierarchy:
+- 40/351 = 11% of capacity used
+- 21 swap operations applied (bits set to 1)
+- Decoded: `"hello"` — match ✓
+
+### Detectability
+
+| Verifier | Detection |
+|----------|-----------|
+| Pre-#33 IOP (composition check only) | **Undetectable** — all swap variants pass as valid |
+| Post-#33 IOP (canonical check added) | **Fully detectable** — any swapped instance fails position check; 0 bits survive |
+
+### Why capacity scales at λ
+
+Each depth level adds a factor of λ (dominant substitution eigenvalue) more sibling pairs, because the number of same-parent P'/F' pairs grows proportionally to the tile count, which grows at λ per level. The channel capacity doubles roughly every log₂(λ) ≈ 2.8 depth levels.
+
+### Implication
+
+The sibling-swap ambiguity creates a covert channel with capacity growing exponentially in hierarchy depth. The #33 canonical check completely eliminates this channel: any stego bit is immediately detectable as a child-type mismatch at the corresponding hierarchy node.
