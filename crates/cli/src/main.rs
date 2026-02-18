@@ -131,6 +131,13 @@ enum Commands {
         system: String,
     },
 
+    /// Analyze geometric modification distance (boundary-tile constraint)
+    GeometricModificationDistance {
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Explore Cucaracha-based group cryptography problems
     GroupCrypto {
         /// Experiment to run: all, recovery, decomposition, stabilizer
@@ -164,6 +171,7 @@ fn main() -> Result<()> {
         Commands::Gap { depth, max_radius, system } => cmd_gap(depth, max_radius, &system),
         Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
         Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
+        Commands::GeometricModificationDistance { system } => cmd_geometric_modification_distance(&system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
     }
 }
@@ -775,6 +783,22 @@ fn cmd_modification_distance(depth: usize, system_name: &str) -> Result<()> {
 
     tiling::vulnerability::print_modification_report(&*system, &analysis);
     debug!("\nCompleted in {:?}", elapsed);
+
+    Ok(())
+}
+
+fn cmd_geometric_modification_distance(system_name: &str) -> Result<()> {
+    let _span = info_span!("geometric_modification_distance", system = system_name).entered();
+
+    let system = tiling::systems::resolve_system(system_name)?;
+
+    info!(
+        "Geometric modification distance analysis: system={}\n",
+        system.name(),
+    );
+
+    let analysis = tiling::vulnerability::analyze_geometric_modification_distance(&*system);
+    tiling::vulnerability::print_geometric_modification_report(&*system, &analysis);
 
     Ok(())
 }

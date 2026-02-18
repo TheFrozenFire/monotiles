@@ -413,3 +413,44 @@ The issue hypothesized that spectre's dense cascade structure would force modifi
 The erasure resilience advantage measured in #17 (spectre survives more random erasures) is irrelevant for *adversarial* modifications. A coordinated adversary does not need to erase tiles; they need only identify any sibling confusable pair and move 1 tile. Both systems provide 51–62 such opportunities at depth 3.
 
 The modification distance is determined solely by the existence of a confusable pair and the presence of sibling instances in the hierarchy — not by the dependency graph density.
+
+## Geometric Modification Distance: Spectre Has Infinite, Hat Has 1 (#30)
+
+The combinatorial modification distance analysis (#26) showed that both hat and spectre have parent-attribution distance = 1. Issue #29 asked whether imposing a geometric constraint changes this: the re-attributed tile must be **at the physical boundary** between the two supertiles, not just any sibling tile.
+
+Only **boundary children** — inflation children not assigned to any supertile — can occupy shared boundaries between adjacent supertiles. The question reduces to: does any boundary child have the same type as the `differing_type` of a confusable pair?
+
+### Results (single inflation step, no depth parameter needed)
+
+| Metric | Hat | Spectre |
+|--------|-----|---------|
+| Total inflation children | 29 | 15 |
+| Boundary children (unassigned) | **7** | **0** |
+| Confusable pair | P' ↔ F' (differ by 1 F child) | Mystic' ↔ Spectre' (differ by 1 Spectre child) |
+| F-type boundary children | **2** (child #14, child #17) | N/A |
+| Spectre-type boundary children | N/A | **0** |
+| Geometric modification distance | **1** | **∞** |
+
+### How hat achieves geometric distance 1
+
+Hat's 29 inflation children include 7 boundary tiles not owned by any supertile (H', T', P', F'). Among these 7:
+- Children #14 and #17 are **F-type**.
+- The confusable pair P' ↔ F' differs by exactly 1 F child.
+- Therefore an adversary can re-attribute one of these F-type boundary tiles from a P'-supertile's "sphere" to an adjacent F'-supertile's "sphere" (or vice versa), converting the P' to F' and the F' to P' — at a cost of 1 boundary attribution change.
+
+### Why spectre has infinite geometric distance
+
+Spectre's 15 inflation children are **all assigned** to Spectre' or Mystic' supertiles — there are no boundary tiles. Without any shared boundary tile at a Mystic'–Spectre' junction, no geometric attribution change is possible. Even though the combinatorial (parent-attribution) distance is 1, it requires a tile physically *inside* one supertile, which cannot be at the boundary.
+
+### Interpretation
+
+The geometric constraint reveals a strict hierarchy of adversarial models:
+
+| Model | Hat | Spectre |
+|-------|-----|---------|
+| Combinatorial (attribution only) | 1 | 1 |
+| Geometric (boundary tiles only) | 1 | **∞** |
+
+Spectre is **strictly more resistant** to geometrically-constrained adversaries. Hat's 7 boundary children — a structural "glue" artifact of its inflation rule — are its geometric weak point. Spectre eliminated this artifact: every inflation child is fully owned, leaving no ambiguous tile at shared boundaries.
+
+This is a concrete separation: any adversary who must move a physically-present tile (rather than relabel an abstract child index) cannot attack spectre at cost 1. Hat remains vulnerable.
