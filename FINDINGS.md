@@ -519,3 +519,97 @@ The prover generates a completely honest proof for H'. No check fails. **The IOP
 ### Implication
 
 The IOP proves "there exists a valid hierarchy consistent with this commitment." It does not prove "this is the unique canonical hierarchy for the underlying tiling." For applications that require canonical labeling (e.g., proving a specific spatial layout, or that two parties committed to the same hierarchy), the IOP must be augmented with a uniqueness argument. The geometric modification distance finding (#30) suggests spectre is harder to attack geometrically, but the algebraic IOP remains blind to algebraic swaps for both systems.
+
+## Swap Density Convergence (#36)
+
+The fraction of sibling pairs that are confusable (swap density) is a structural constant determined by the substitution rules — for hat it is exactly constant at all depths; for spectre it converges to a value determined by the dominant eigenvector.
+
+### Hat: exactly 1/5 at every level and every depth
+
+For each supertile type in hat, the ratio (swap pairs from this parent) / (total sibling pairs from this parent) is:
+
+| Parent type | Children (n) | P'×F' swap pairs | Total pairs C(n,2) | Density |
+|-------------|-------------|-------------------|---------------------|---------|
+| H' | 10 | 3×3 = 9 | 45 | **1/5** |
+| T' | 1 | 0 | 0 | — |
+| P' | 5 | 1×2 = 2 | 10 | **1/5** |
+| F' | 6 | 1×3 = 3 | 15 | **1/5** |
+
+Every non-trivial supertile type contributes exactly 20% swap-vulnerable pairs. Since the density is identical for all contributing types, the overall density is exactly 1/5 regardless of the mix of parent types at any level. This holds at **every level and every depth** — it is depth-independent and purely a function of the substitution rules.
+
+Verified computationally: all levels at all depths 2–6 give exactly 0.2000.
+
+### Spectre: converges to ~25.37%
+
+Spectre's two types have different local densities:
+
+| Parent type | Children (n) | S×M swap pairs | Total pairs | Density |
+|-------------|-------------|----------------|-------------|---------|
+| Spectre' | 8 | 7×1 = 7 | 28 | 25.00% |
+| Mystic' | 7 | 6×1 = 6 | 21 | 28.57% |
+
+The overall density at each level depends on the S':M' ratio at the level above. This ratio converges to the dominant eigenvector ratio (3+2√3):1 ≈ 6.464:1, giving asymptotic density:
+
+**f* = (6.464×7 + 6) / (6.464×28 + 21) = 51.25/202.0 ≈ 25.37%**
+
+Observed convergence: depth-2 level-1 = 25.00%, depth-3 level-1 = 25.35%, depth-4+ level-1 = 25.35% (converged to 4 decimal places).
+
+### Implication
+
+Neither system's swap density decreases with depth. Hat is locked at exactly 20%; spectre converges immediately to ~25.4%. Increasing depth does not reduce the fraction of sibling pairs that are confusable. The defense against sibling swaps must be structural (canonicalization, issue #33), not parametric.
+
+## IOP Query Coverage of Swap-Vulnerable Positions (#34)
+
+A "swap-vulnerable" tile is one of P'- or F'-type (hat) or Spectre'/Mystic'-type (spectre) that has at least one confusable sibling. The probability that a random IOP query hits such a tile determines how often the verifier "sees" a swap if one occurred.
+
+### Hat: ~61.8% of tiles are swap-vulnerable
+
+In the hat system, every P'- and F'-type tile has at least one confusable sibling (because every parent type that produces P' children also produces F' children, and vice versa). Only H'-type children of T'-type supertiles are non-vulnerable — but T' has only one H'-type child and no P'/F' children. So the vulnerable fraction equals the P'+F' fraction of all tiles.
+
+| Depth | Level | Total tiles | Vulnerable | Fraction | Queries for 99% |
+|-------|-------|-------------|------------|----------|-----------------|
+| 3 | 1 | 64 | 39 | 60.9% | **5** |
+| 3 | 2 | 10 | 6 | 60.0% | **5** |
+| 4 | 1 | 442 | 273 | 61.8% | **5** |
+| 5 | 1 | 3025 | 1869 | 61.8% | **5** |
+| 6 | 1 | 20737 | 12816 | 61.8% | **5** |
+
+Converges to ~61.8% (the P'+F' fraction of the dominant eigenvector). **5 queries per level give >99% probability of hitting a swap-vulnerable tile.**
+
+### Spectre: 100% of tiles are swap-vulnerable
+
+Every Spectre'- and Mystic'-type tile has at least one sibling of the opposite type, because both Spectre' (7S+1M) and Mystic' (6S+1M) parents produce at least one child of each type. **Every query hits a swap-vulnerable tile.** A single query per level gives 100% coverage.
+
+### The IOP query count is already more than sufficient for coverage
+
+With 8 queries per level (the default), the probability of missing ALL swap-vulnerable tiles across all levels of a depth-3 hierarchy is < 10⁻⁶. The IOP's existing query budget vastly exceeds what is needed to "see" the swapped positions. The problem is not query coverage — it is that seeing the swapped tile does not help, because the verifier accepts both hierarchies as valid. Coverage is necessary but not sufficient; a canonical form check is also needed.
+
+## Non-Sibling Modification Cost Landscape (#35)
+
+Are sibling swaps the unique cost-1 modifications? Yes. The modification distance landscape is bimodal: cost 1 for sibling swaps, cost ≥ 2 for everything else.
+
+### Proof that non-sibling modifications cost ≥ 2
+
+A cost-1 modification moves one tile from supertile A to supertile B. Two cases:
+
+**Case 1: A and B are siblings (same parent P).**
+- A loses one child of `differing_type` → A's composition changes to B's old composition → A is relabeled B.
+- B gains one child → B is relabeled A.
+- P's child-type multiset: had one A and one B, now has one B and one A → **unchanged**. Cascade cost = 0. Total cost = 1.
+- This is the sibling swap. Valid when A and B form a confusable pair.
+
+**Case 2: A and B are not siblings (different parents P_A and P_B).**
+- A's type changes (it lost a child) → P_A's child-type multiset changes (one fewer of A's old type, one more of A's new type) → P_A's composition changes → P_A's type may change → cascade cost ≥ 1. Total cost ≥ 2.
+
+Therefore, the only cost-1 zero-cascade modifications are sibling swaps between confusable pairs. All other modifications cost at least 2.
+
+### Implications for the modification distance spectrum
+
+| Modification type | Min cost | Min cascade | Example |
+|-------------------|----------|-------------|---------|
+| Sibling swap (confusable pair) | **1** | **0** | P'↔F' swap between siblings |
+| Two independent sibling swaps | **2** | **0** | Two separate P'↔F' pairs swapped |
+| Non-sibling type move | **2** | **≥1** | Move tile between non-adjacent supertiles |
+| Root modification | **≥depth** | **depth** | Change the seed type propagates all the way down |
+
+The landscape is gapped: there is no modification with cost strictly between 1 and 2. The set of reachable valid hierarchies from any given H is partitioned into: H itself (cost 0), and hierarchies at distance 1 (all sibling-swap variants, exponentially many of them), with a gap before any distance-2 modifications.
