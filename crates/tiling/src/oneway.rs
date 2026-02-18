@@ -768,4 +768,259 @@ mod tests {
             );
         }
     }
+
+    // --- Scale tests (~142K base tiles, ~320x the depth-3 baseline) ---
+
+    const LARGE_DEPTH: usize = 6;
+
+    fn assert_hierarchy_counts(seed: MetatileType, depth: usize) {
+        let hierarchy = build_flat_hierarchy(seed, depth);
+        let expected = crate::substitution::generate_counts(seed, depth);
+        for (level_idx, level_types) in hierarchy.tile_types.iter().enumerate() {
+            let mut counts = [0usize; 4];
+            for t in level_types {
+                counts[t.index()] += 1;
+            }
+            let gen_level = depth - level_idx;
+            assert_eq!(
+                counts, expected[gen_level],
+                "seed {:?} depth {} hierarchy level {} mismatch",
+                seed, depth, level_idx
+            );
+        }
+    }
+
+    fn assert_decomposition_unique_all_levels(seed: MetatileType, depth: usize) {
+        let hierarchy = build_flat_hierarchy(seed, depth);
+        for level in 0..=depth {
+            let mut counts = [0usize; 4];
+            for t in &hierarchy.tile_types[level] {
+                counts[t.index()] += 1;
+            }
+            if level < depth {
+                // Non-top levels should have a unique decomposition
+                assert_eq!(
+                    count_decompositions(counts),
+                    1,
+                    "seed {:?} depth {} level {} should have unique decomposition",
+                    seed, depth, level
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn large_hierarchy_counts() {
+        assert_hierarchy_counts(MetatileType::H, LARGE_DEPTH);
+    }
+
+    #[test]
+    fn large_decomposition_unique() {
+        assert_decomposition_unique_all_levels(MetatileType::H, LARGE_DEPTH);
+    }
+
+    #[test]
+    fn large_greedy_deflate_succeeds() {
+        let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
+        let (assignments, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+        assert!(
+            (rate - 1.0).abs() < 1e-10,
+            "greedy deflation at depth {} should assign all {} tiles, got rate {}",
+            LARGE_DEPTH,
+            hierarchy.tile_types[0].len(),
+            rate
+        );
+        assert!(assignments.iter().all(|a| a.is_some()));
+    }
+
+    #[test]
+    fn large_full_sibling_all_determined_radius_1() {
+        // The core claim: with full sibling adjacency, every tile at every
+        // level is determined at radius <= 1.
+        let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
+        for level in 0..LARGE_DEPTH {
+            let adj = full_sibling_adjacency(&hierarchy, level);
+            let radii = compute_determination_radii(&hierarchy, &adj, level, 1);
+            let undetermined = radii.iter().filter(|r| r.is_none()).count();
+            let max_r = radii.iter().filter_map(|r| *r).max().unwrap_or(0);
+            assert_eq!(
+                undetermined, 0,
+                "level {} ({} tiles): {} undetermined",
+                level,
+                hierarchy.tile_types[level].len(),
+                undetermined
+            );
+            assert!(
+                max_r <= 1,
+                "level {} max determination radius {} > 1",
+                level, max_r
+            );
+        }
+    }
+
+    #[test]
+    fn large_inflation_adj_all_determined_radius_4() {
+        // With intra-supertile inflation adjacency, every tile is determined
+        // within radius 4 (due to H' supertile being disconnected).
+        let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
+        // Only test base level (largest) — upper levels are tested at smaller depths
+        let adj = intra_supertile_adjacency(&hierarchy, 0);
+        let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
+        let undetermined = radii.iter().filter(|r| r.is_none()).count();
+        let max_r = radii.iter().filter_map(|r| *r).max().unwrap_or(0);
+        assert_eq!(
+            undetermined, 0,
+            "base level ({} tiles): {} undetermined with inflation adj",
+            hierarchy.tile_types[0].len(),
+            undetermined
+        );
+        assert!(
+            max_r <= 4,
+            "base level max inflation-adj determination radius {} > 4",
+            max_r
+        );
+    }
+
+    #[test]
+    fn large_local_deflate_resolves_all() {
+        let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
+        let adj = full_sibling_adjacency(&hierarchy, 0);
+        let (_, unresolved) = local_deflate(&hierarchy, &adj, 0, 1);
+        assert_eq!(
+            unresolved, 0,
+            "local deflate at radius 1 should resolve all {} base tiles",
+            hierarchy.tile_types[0].len()
+        );
+    }
+
+    #[test]
+    fn large_determination_radius_distribution_stable() {
+        // The fraction of tiles at each determination radius should be
+        // stable across depths (self-similar structure).
+        let hierarchy = build_flat_hierarchy(MetatileType::H, LARGE_DEPTH);
+        let adj = full_sibling_adjacency(&hierarchy, 0);
+        let radii = compute_determination_radii(&hierarchy, &adj, 0, 1);
+
+        let n = radii.len() as f64;
+        let at_r0 = radii.iter().filter(|r| **r == Some(0)).count() as f64;
+        let fraction_r0 = at_r0 / n;
+
+        // T-type tiles are ~4.86% of the total (T count / total count).
+        // These are exactly the tiles determined at radius 0.
+        let mut type_counts = [0usize; 4];
+        for t in &hierarchy.tile_types[0] {
+            type_counts[t.index()] += 1;
+        }
+        let t_fraction = type_counts[1] as f64 / n;
+
+        assert!(
+            (fraction_r0 - t_fraction).abs() < 0.01,
+            "fraction at radius 0 ({:.4}) should match T-type fraction ({:.4})",
+            fraction_r0, t_fraction
+        );
+    }
+
+    // --- All seeds test (verify properties are seed-independent) ---
+
+    #[test]
+    fn all_seeds_decomposition_unique_depth_4() {
+        for seed in MetatileType::all() {
+            assert_decomposition_unique_all_levels(seed, 4);
+        }
+    }
+
+    #[test]
+    fn all_seeds_full_sibling_radius_1_depth_4() {
+        for seed in MetatileType::all() {
+            let hierarchy = build_flat_hierarchy(seed, 4);
+            for level in 0..4 {
+                let adj = full_sibling_adjacency(&hierarchy, level);
+                let radii = compute_determination_radii(&hierarchy, &adj, level, 1);
+                let undetermined = radii.iter().filter(|r| r.is_none()).count();
+                assert_eq!(
+                    undetermined, 0,
+                    "seed {:?} depth 4 level {}: {} undetermined with full sibling adj",
+                    seed, level, undetermined
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_seeds_greedy_deflate_depth_4() {
+        for seed in MetatileType::all() {
+            let hierarchy = build_flat_hierarchy(seed, 4);
+            let (_, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+            assert!(
+                (rate - 1.0).abs() < 1e-10,
+                "seed {:?} depth 4: greedy rate {}",
+                seed, rate
+            );
+        }
+    }
+
+    // --- Extra-large scale tests (~974K base tiles, ~2200x baseline) ---
+
+    const XLARGE_DEPTH: usize = 7;
+
+    #[test]
+    #[ignore] // ~974K tiles, takes ~40s in release
+    fn xlarge_hierarchy_counts() {
+        assert_hierarchy_counts(MetatileType::H, XLARGE_DEPTH);
+    }
+
+    #[test]
+    #[ignore]
+    fn xlarge_decomposition_unique() {
+        assert_decomposition_unique_all_levels(MetatileType::H, XLARGE_DEPTH);
+    }
+
+    #[test]
+    #[ignore]
+    fn xlarge_greedy_deflate_succeeds() {
+        let hierarchy = build_flat_hierarchy(MetatileType::H, XLARGE_DEPTH);
+        let n = hierarchy.tile_types[0].len();
+        let (assignments, rate) = greedy_deflate(&hierarchy.tile_types[0]);
+        assert!(
+            (rate - 1.0).abs() < 1e-10,
+            "greedy deflation at depth {} should assign all {} tiles, got rate {}",
+            XLARGE_DEPTH, n, rate
+        );
+        assert!(assignments.iter().all(|a| a.is_some()));
+    }
+
+    #[test]
+    #[ignore]
+    fn xlarge_full_sibling_all_determined_radius_1() {
+        let hierarchy = build_flat_hierarchy(MetatileType::H, XLARGE_DEPTH);
+        for level in 0..XLARGE_DEPTH {
+            let adj = full_sibling_adjacency(&hierarchy, level);
+            let radii = compute_determination_radii(&hierarchy, &adj, level, 1);
+            let undetermined = radii.iter().filter(|r| r.is_none()).count();
+            assert_eq!(
+                undetermined, 0,
+                "level {} ({} tiles): {} undetermined",
+                level,
+                hierarchy.tile_types[level].len(),
+                undetermined
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn xlarge_inflation_adj_all_determined_radius_4() {
+        let hierarchy = build_flat_hierarchy(MetatileType::H, XLARGE_DEPTH);
+        let adj = intra_supertile_adjacency(&hierarchy, 0);
+        let radii = compute_determination_radii(&hierarchy, &adj, 0, 5);
+        let undetermined = radii.iter().filter(|r| r.is_none()).count();
+        let max_r = radii.iter().filter_map(|r| *r).max().unwrap_or(0);
+        assert_eq!(
+            undetermined, 0,
+            "base level ({} tiles): {} undetermined",
+            hierarchy.tile_types[0].len(),
+            undetermined
+        );
+        assert_eq!(max_r, 4, "expected max radius 4 at xlarge scale");
+    }
 }
