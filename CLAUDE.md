@@ -75,24 +75,11 @@ This is a research project. The workflow is:
 - Open issues represent live hypotheses or planned experiments
 - When findings invalidate an open issue's premise, close it with an explanation
 
-### Issue Map
+To get the full issue landscape:
 
-Closed (resolved):
-- #1-4: Foundation (Coxeter, Cucaracha, metatiles, spectral) — implemented
-- #5: One-way substitution — **disproven** (deflation is local)
-- #6: Local-to-global gap — **information-theoretic barrier**, not computational
-- #8: Group cryptography — **not viable** (Gamma too tractable)
-- #9: Tiling IOP — implemented, works but limited soundness
-- #11: Substitution trapdoor signatures — **dead** (no trapdoor exists)
-
-Open:
-- #7, #10: QECC construction (note: recovery granularity = supertile)
-- #12: IOP with polynomial commitments for 128-bit security
-- #13-16: Gap follow-ups (geometric adjacency, partial ancestry, MI growth, large depth)
-- #17: Spectre vs hat erasure resilience
-- #18: Confusable pair prediction from matrices
-- #19: Minimum useful patch size
-- #20: IOP proof size scaling
+```
+gh issue list --repo TheFrozenFire/monotiles --state all --json number,title,state,comments --jq '.[] | "#\(.number) [\(.state)] \(.title) (\(.comments | length) comments)"' | sort -t'#' -k2 -n
+```
 
 ## Key Patterns
 
