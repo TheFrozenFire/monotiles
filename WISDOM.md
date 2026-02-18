@@ -161,7 +161,7 @@ After building a substantial body of experimental findings and then reasoning ab
 
 **ROCQ is the proof archive.** It takes the cleanest claims from the laboratory and establishes them as theorems that hold universally — not just for the depths and seeds we tested. ROCQ proves by structural induction, case analysis, and algebraic identity. It cannot run an erasure sweep, but it can prove that the local-to-global gap is zero below radius = depth for *every* depth, which the Rust experiments can only confirm for depths 3–6.
 
-**A CAS (PARI/GP, SageMath, Magma) is the calculator.** It computes Galois groups, class numbers, Smith normal forms, discriminants, and zeta functions. These are one-shot algebraic computations — not experiments, not proofs. The results can then be recorded as facts (in RESEARCH.md) and optionally verified in ROCQ.
+**A CAS (PARI/GP, SageMath, Magma) is the calculator.** It computes Galois groups, class numbers, Smith normal forms, discriminants, and zeta functions. These are one-shot algebraic computations — not experiments, not proofs. The results go into **FINDINGS.md** (they are things we computed, not things we read) and optionally get verified in ROCQ. RESEARCH.md is reserved for published results with citations; a PARI output is a finding, not a literature reference.
 
 ### Which open issues belong where
 
@@ -174,7 +174,7 @@ After building a substantial body of experimental findings and then reasoning ab
 - Formalizing the bimodal cost landscape (#43) — extends the cascade proof to all non-sibling modifications
 - The commitment scheme security proof (#44) — binding reduces to hash collision; hiding follows from the gap
 
-**CAS-then-record** (algebraic number theory computations, results go to RESEARCH.md):
+**CAS-then-record** (algebraic number theory computations, results go to FINDINGS.md):
 - **#49** Characteristic polynomial coefficients and Galois group — PARI `galoisinit`
 - **#52** Number field invariants: discriminant, class number, unit group — PARI `bnfinit`
 - **#56** Zeta function rational form and Mahler measure — symbolic computation from eigenvalues
