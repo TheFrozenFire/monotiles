@@ -148,6 +148,19 @@ enum Commands {
         system: String,
     },
 
+    /// Measure tamper detection under substitution noise (#24)
+    TamperDetection {
+        /// Hierarchy depth
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        /// Number of trials per tamper rate
+        #[arg(short, long, default_value_t = 50)]
+        trials: usize,
+        /// Tiling system: hat, spectre, or hat-turtle
+        #[arg(short = 'S', long, default_value = "hat")]
+        system: String,
+    },
+
     /// Steganographic encoding in sibling-swap bit channels (#27)
     Stego {
         /// Hierarchy depth
@@ -209,6 +222,7 @@ fn main() -> Result<()> {
         Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
         Commands::GeometricModificationDistance { system } => cmd_geometric_modification_distance(&system),
         Commands::CanonicalCheck { depth, system } => cmd_canonical_check(depth, &system),
+        Commands::TamperDetection { depth, trials, system } => cmd_tamper_detection(depth, trials, &system),
         Commands::Stego { depth, message, system } => cmd_stego(depth, &message, &system),
         Commands::ProofSizeScaling { max_depth, queries, system } => cmd_proof_size_scaling(max_depth, queries, &system),
         Commands::GroupCrypto { experiment, max_size, trials } => cmd_group_crypto(&experiment, max_size, trials),
@@ -822,6 +836,100 @@ fn cmd_modification_distance(depth: usize, system_name: &str) -> Result<()> {
 
     tiling::vulnerability::print_modification_report(&*system, &analysis);
     debug!("\nCompleted in {:?}", elapsed);
+
+    Ok(())
+}
+
+fn cmd_tamper_detection(depth: usize, trials: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("tamper_detection", depth, trials, system = system_name).entered();
+    use ark_bls12_381::Fr;
+
+    let system = tiling::systems::resolve_system(system_name)?;
+    let num_types = system.num_types();
+
+    info!("=== Tamper Detection Under Substitution Noise (#24) ===");
+    info!("System: {}, depth: {}, trials per rate: {}", system.name(), depth, trials);
+    info!("");
+
+    // Tamper rates to test: fraction of BASE tiles whose type is flipped to a random other type
+    let tamper_rates = [0.01, 0.02, 0.05, 0.10, 0.20, 0.50];
+
+    // Simple xorshift PRNG (deterministic)
+    let mut rng_state: u64 = 0xDEAD_BEEF_CAFE_1337_u64;
+    let mut next_u64 = move || -> u64 {
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 7;
+        rng_state ^= rng_state << 17;
+        rng_state
+    };
+
+    info!("tamper_rate | detected | accepted | detection_rate | note");
+    info!("-----------|----------|----------|----------------|-----");
+
+    // Baseline: 0% tamper — should always be accepted
+    {
+        let mut detected = 0usize;
+        for _ in 0..trials {
+            let mut hierarchy = iop::hierarchy::build_hierarchy_system::<Fr>(&*system, 0, depth);
+            let n = hierarchy.levels[0].tile_types.len();
+            for i in 0..n { hierarchy.levels[0].values[i] = Fr::from((i as u64 + 1) * 7 + 13); }
+            let proof = iop::prover::prove(&mut hierarchy, 8, &*system);
+            if iop::verifier::verify(&proof).is_err() { detected += 1; }
+        }
+        info!("      0.00% | {:8} | {:8} | {:13.1}% | baseline (honest prover)",
+            detected, trials - detected, detected as f64 / trials as f64 * 100.0);
+    }
+
+    for &rate in &tamper_rates {
+        let mut detected = 0usize;
+        let mut sibling_swap_only = 0usize;
+
+        for _ in 0..trials {
+            let mut hierarchy = iop::hierarchy::build_hierarchy_system::<Fr>(&*system, 0, depth);
+            let n = hierarchy.levels[0].tile_types.len();
+            for i in 0..n { hierarchy.levels[0].values[i] = Fr::from((i as u64 + 1) * 7 + 13); }
+
+            // Flip each base tile with probability `rate`
+            let threshold = (rate * u64::MAX as f64) as u64;
+            let mut any_non_sibling = false;
+            let swaps = tiling::vulnerability::enumerate_valid_swaps(&*system);
+            let confusable_pairs: std::collections::HashSet<(usize, usize)> = swaps.iter()
+                .flat_map(|sw| [(sw.source_supertile, sw.target_supertile),
+                                (sw.target_supertile, sw.source_supertile)])
+                .collect();
+
+            for i in 0..n {
+                if next_u64() < threshold {
+                    let orig = hierarchy.levels[0].tile_types[i];
+                    // Pick a different type uniformly
+                    let new_type = (orig + 1 + (next_u64() as usize % (num_types - 1))) % num_types;
+                    hierarchy.levels[0].tile_types[i] = new_type;
+                    if !confusable_pairs.contains(&(orig, new_type)) {
+                        any_non_sibling = true;
+                    }
+                }
+            }
+
+            if !any_non_sibling {
+                sibling_swap_only += 1;
+            }
+
+            let proof = iop::prover::prove(&mut hierarchy, 8, &*system);
+            if iop::verifier::verify(&proof).is_err() {
+                detected += 1;
+            }
+        }
+
+        info!("     {:5.2}% | {:8} | {:8} | {:13.1}% | sibling-swap-only trials: {}",
+            rate * 100.0, detected, trials - detected,
+            detected as f64 / trials as f64 * 100.0,
+            sibling_swap_only);
+    }
+
+    info!("");
+    info!("Note: sibling swaps (P'↔F' for hat, Spectre'↔Mystic' for spectre) are");
+    info!("      never detected — they produce valid alternative hierarchies (#31).");
+    info!("      All other type substitutions violate composition → detected.");
 
     Ok(())
 }

@@ -797,3 +797,82 @@ Each depth level adds a factor of λ (dominant substitution eigenvalue) more sib
 ### Implication
 
 The sibling-swap ambiguity creates a covert channel with capacity growing exponentially in hierarchy depth. The #33 canonical check completely eliminates this channel: any stego bit is immediately detectable as a child-type mismatch at the corresponding hierarchy node.
+
+## Local-to-Global Gap Closes at Radius = Depth (#16)
+
+The local-to-global gap closing radius equals the hierarchy depth exactly, for both hat and spectre across all tested depths.
+
+| System | depth 3 | depth 4 | depth 5 | depth 6 |
+|--------|---------|---------|---------|---------|
+| Hat | closes r=3 | closes r=4 | closes r=5 | closes r=6 |
+| Spectre | closes r=3 | closes r=4 | closes r=5 | closes r=6 |
+
+The pattern holds without exception: gap closing radius = depth.
+
+**Interpretation**: to verify that a tile is globally consistent with the full hierarchy, you must propagate the check upward through all `depth` levels of the substitution hierarchy. At each level, the local neighborhood of valid context expands by one "supertile radius." A neighborhood of radius `depth` is exactly the smallest window that reaches the root — no smaller window can guarantee global consistency, and radius `depth` is always sufficient.
+
+**Consequence for IOP**: this confirms that the query radius for the tiling IOP scales linearly with depth, not super-linearly. The IOP's depth × queries complexity matches the O(depth) closing radius.
+
+## Minimum Useful Patch Size for Recovery (#19)
+
+Recovery succeeds perfectly (all erased tiles matched) only for holes of at most 3 tiles (radius ≤ 1.5). Beyond that threshold, recovery becomes partial.
+
+### Results (levels=3, hat H-patch, 442 total tiles)
+
+| radius | erased | matched | unmatched | match rate |
+|--------|--------|---------|-----------|-----------|
+| 0.5 | 1 | 1 | 0 | 100% ✓ |
+| 1.0 | 3 | 3 | 0 | 100% ✓ |
+| 1.5 | 3 | 3 | 0 | 100% ✓ |
+| 2.0 | 9 | 3 | 6 | 33% ✗ |
+| 3.0 | 17 | 3 | 14 | 18% ✗ |
+| 4.0 | 27 | 3 | 24 | 11% ✗ |
+| 5.0 | 43 | 3 | 40 | 7% ✗ |
+
+**The threshold is at 3 erased tiles.** The recovery algorithm (deflation-based) reliably reconstructs up to 3 contiguous missing tiles. At 9 or more, the hole is too large for the local deflation context to fully close.
+
+**Depth independence**: the match rate does not depend on the `levels` parameter at the same radius — the recovery is determined by the geometric hole size, not the total patch size. The context (99%+ of tiles remaining) is always sufficient; the limit is the algorithm's local search radius.
+
+**Extra recovered tiles**: the deflation-based recovery always regenerates a large superpatch (251 tiles at 3 levels of deflation). Only 1–3 of these overlap with the original hole positions. The rest are "bonus" tiles outside the erased region.
+
+## IOP Tamper Detection Under Substitution Noise (#24)
+
+The IOP detects arbitrary type substitutions at the base level (non-sibling type changes) whenever the tampered tile is queried. Detection scales with tamper rate and query coverage.
+
+### Detection rates (depth=3, 8 queries, 50 trials)
+
+**Hat:**
+
+| tamper rate | detected | not detected | detection rate |
+|-------------|----------|-------------|----------------|
+| 0% | 0/50 | 50/50 | 0.0% (baseline) |
+| 1% | 19/50 | 31/50 | 38.0% |
+| 2% | 38/50 | 12/50 | 76.0% |
+| 5% | 46/50 | 4/50 | 92.0% |
+| 10% | 50/50 | 0/50 | **100.0%** |
+| 20% | 50/50 | 0/50 | 100.0% |
+| 50% | 50/50 | 0/50 | 100.0% |
+
+**Spectre:**
+
+| tamper rate | detected | not detected | detection rate |
+|-------------|----------|-------------|----------------|
+| 0% | 0/50 | 50/50 | 0.0% (baseline) |
+| 1% | 22/50 | 28/50 | 44.0% |
+| 2% | 35/50 | 15/50 | 70.0% |
+| 5% | 49/50 | 1/50 | 98.0% |
+| 10% | 50/50 | 0/50 | **100.0%** |
+| 20% | 50/50 | 0/50 | 100.0% |
+| 50% | 50/50 | 0/50 | 100.0% |
+
+### Detection mechanism
+
+The `verify_fold` function checks both (1) the multiset composition (child type counts must match the claimed parent type's expected composition) and (2) the folding value. A base-level type flip changes the child's type reported to the verifier, which changes the actual child-type counts and breaks the composition check for that parent.
+
+**Why some trials escape detection**: with 8 queries over ~442–496 base tiles, roughly 8×avg_children ≈ 60 parent-child pairs are checked per round. At 1% tamper rate (~5 flipped tiles), the probability that at least one changed tile is checked = 1 − (1 − 5/496)^60 ≈ 46%. The observed rates (38–44%) match this analytical estimate.
+
+**10% tamper is the saturation threshold**: at 10% tamper rate (~50 flipped tiles), detection probability per trial = 1 − (1 − 50/496)^60 > 99.99%, so all 50 trials are detected.
+
+### Contrast with sibling swaps (#31)
+
+Base-level type flips (even P→F or Spectre→Mystic) ARE detected because they break composition at the parent level. The undetectable case from #31 is specifically SUPERTILE-LEVEL label swaps between sibling P'/F' pairs, where both siblings are already valid children of the same parent — the multiset is unchanged.
