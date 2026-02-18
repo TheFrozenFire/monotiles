@@ -86,12 +86,37 @@ P' = {2H, 1P, 2F}  (5 children)
 F' = {2H, 1P, 3F}  (6 children)
 ```
 
-P's bag is a sub-multiset of F's bag. Any supertile type whose bag is a sub-multiset of another's creates a potential swap. The hat system has exactly one such pair. The spectre system (2 types, no subset relations between their child bags) has **zero** confusable pairs.
+P's bag is a sub-multiset of F's bag. Any supertile type whose bag is a sub-multiset of another's creates a potential swap. The hat system has exactly one such pair.
 
-This means confusability is a property of the substitution matrix's column structure, not of the geometry. You can predict all confusable pairs from the matrix alone without generating any tiles.
+Counterintuitively, the spectre system also has exactly one confusable pair: Mystic'↔Spectre'. Their child bags are:
+
+```
+Mystic'  = {6 Spectre, 1 Mystic}  (7 children)
+Spectre' = {7 Spectre, 1 Mystic}  (8 children)
+```
+
+Mystic's bag is a sub-multiset of Spectre's bag, differing by one Spectre tile. The assumption that a 2-type system would be simpler breaks down at the supertile level: the substitution rules create the sub-multiset relation even though the base tiles are homogeneous.
+
+This means confusability is a property of the substitution matrix's column structure, not of the geometry or the number of base tile types. You can predict all confusable pairs from the matrix alone without generating any tiles.
 
 ## H-Supertile Identification Requires Only One T-Tile
 
 The minimum determining set for H' is a single tile: the T at position 3. This works because T-type children appear **only** in H-supertiles (the T' row of the substitution matrix is [1, 0, 0, 0]). Seeing any T-child immediately identifies the parent as H.
 
 In contrast, P' and F' require all their children because they differ by only one F-tile and share all other child types. The determining set size is controlled by the confusability structure, not the supertile size.
+
+## Hat and Spectre Are Complementary Codes, Not Competing Ones
+
+The erasure experiments (#17) initially looked like "hat good, spectre bad." But they're measuring complementary properties.
+
+**Hat is a correcting code.** Its erasure resilience (~60-70% threshold) comes from structural heterogeneity: H' and T' are identifiable from a single child, acting as anchor types that bootstrap recovery of surrounding P'/F' tiles. The dependency graph is sparse (84% of tiles self-determined). This is structurally analogous to LDPC codes: sparse bipartite check graph, anchor nodes that seed iterative decoding, graceful degradation with a high threshold.
+
+**Spectre is a detecting code.** Its 7-regular dependency graph means any single tile change immediately violates 7 sibling constraints, each of which cascades further. No anchor types exist — there are no cheap positions that an adversary can answer without maintaining full consistency. The detection sensitivity is uniform across the tiling. This is useful for tamper-evidence and integrity checking, where you want *any* modification to be caught, not necessarily recovered from.
+
+The root cause is **type-level diversity**. More types with heterogeneous compositions create anchors — tiles whose type is uniquely diagnostic. Fewer types with similar compositions create uniformity — no tile is easier or harder to fake than any other. These are opposite design goals that serve opposite purposes.
+
+**Implications for the IOP construction.** Hat-based IOPs favor efficiency: the prover can commit cheaply to H'/T' supertiles (one consistent child suffices) and the verifier's queries are faster to answer. Spectre-based IOPs favor soundness: a cheating prover has no cheap positions, every query requires a fully consistent fake hierarchy, and the avalanche structure means a single inconsistency is detectable from many query positions. If soundness is the binding constraint, spectre may be the stronger foundation despite worse erasure resilience.
+
+**The no-reflection property compounds this.** Hat requires mirror tiles — a valid hat tiling admits local chirality choices. A prover constructing a fake hat hierarchy has some freedom to vary chirality locally without invalidating the hierarchy. Spectre tiles without reflections: every tile is the same handedness, and the orientation constraints are globally consistent. This removes a degree of freedom that a cheating prover could otherwise exploit. Spectre's geometric rigidity translates directly to commitment rigidity.
+
+**The plateau behavior hints at a threshold access structure.** Spectre's determined% collapses from 100% to ~50% at just 10% erasure, then holds flat (~38-44%) through 20-70% erasure. This is not gradual degradation — it is a sharp threshold followed by a stable floor. Compared to secret sharing: you need ~90% of tiles to determine the hierarchy; below that you immediately lose roughly half of all type information and further loss changes little. Whether this threshold can be sharpened and the floor driven toward zero (making it a true (k,n) threshold structure) is an open question.
