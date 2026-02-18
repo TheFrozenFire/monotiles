@@ -63,7 +63,7 @@ This is a research project. The workflow is:
 
 3. **Run, observe, instrument.** Run experiments at small sizes first. If something is slow, don't just wait — add tracing instrumentation, run again with a short timeout, and diagnose the bottleneck. Check output proactively.
 
-   **Hard rule: 2 minute maximum for any task or experiment** unless explicitly authorized as a long-running experiment. Every experiment should complete in under 2 minutes on this host. If it doesn't, that's a bug — either the parameters are too large, the algorithm needs a node budget, or the approach needs rethinking. Don't increase timeouts; fix the experiment.
+   **Hard rule: 2 minute maximum for any task or experiment** unless explicitly authorized as a long-running experiment. Every experiment should complete in under 2 minutes on this host. If it doesn't, that's a bug — either the parameters are too large, the algorithm needs a node budget, or the approach needs rethinking. Don't increase timeouts; fix the experiment. When re-running after a fix, use a *shorter* timeout (e.g., 30s) — the fix should demonstrably reduce runtime, not risk burning another 2 minutes. Repeatedly running 2-minute experiments to see if they finish is wasting time.
 
 4. **Document findings.** Experimental results go in FINDINGS.md with data tables and issue references. Process insights go in WISDOM.md. Close the GitHub issue with a summary comment linking to the docs.
 
