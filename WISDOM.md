@@ -64,3 +64,21 @@ The formalization verified existing mathematics — we didn't discover new theor
 - Integer vs floating-point structure (Fibonacci counts, palindromic polynomials)
 
 These are exactly the places where bugs hide in computational code and where informal proofs wave their hands. The Rust code was correct, but the formalization explained *why* it was correct in ways the code alone couldn't.
+
+## The Local-to-Global Gap Is All-or-Nothing
+
+The gap between local indistinguishability and global rigidity in hierarchical substitution tilings closes as a **sharp phase transition**, not a gradual curve. At every hierarchical radius below the depth, advantage is ~0% — no tile can determine which seed generated its tiling. At radius = depth, advantage jumps to 100% in a single step.
+
+This is because the substitution is **recursively self-similar**: the local structure within any finite subtree is fully determined by the subtree root's type, independent of what's above it in the hierarchy. Two tiles from different seeds but with the same ancestor chain up to level k are locally indistinguishable at radius k. Only when the chain reaches the seed (radius = depth) does the difference become visible.
+
+The BFS-based type signature (used in one-way analysis) makes this even starker: with sibling adjacency, a tile can determine its immediate parent type at radius 1, but **cannot determine any higher ancestor** regardless of radius. The adjacency graph is disconnected at supertile boundaries, creating an absolute information barrier. The only way to see past this barrier is to observe the hierarchy itself — the ancestor type chain.
+
+This means the local-to-global gap is **information-theoretic, not computational**. It's not that determining the seed is *hard* — it's that the information simply isn't present in any finite local neighborhood of the base tiling. The gap closes the instant you can see the seed, and not one step sooner.
+
+## Mutual Information Reveals Partial Structure Before the Gap Closes
+
+While the distinguishing advantage (fraction of tiles with seed-unique signatures) is 0 for all radii below depth, the **mutual information** between seed and signature is nonzero starting at radius 1-2. This is because the *distribution* of tiles across signatures varies by seed, even when no individual signature is unique.
+
+For example, in the hat system at depth 3: seeing grandparent type T rules out P-seed and F-seed (they don't produce T-type level-2 tiles at that depth), concentrating probability on H-seed and T-seed. This partial information shows up as positive mutual information even though no tile can deterministically identify its seed.
+
+The gap between "zero advantage" and "positive mutual information" is the difference between **deterministic** and **probabilistic** distinguishability. A Bayesian observer gains information before the gap closes; a deterministic algorithm cannot.
