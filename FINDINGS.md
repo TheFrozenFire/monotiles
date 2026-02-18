@@ -876,3 +876,70 @@ The `verify_fold` function checks both (1) the multiset composition (child type 
 ### Contrast with sibling swaps (#31)
 
 Base-level type flips (even P→F or Spectre→Mystic) ARE detected because they break composition at the parent level. The undetectable case from #31 is specifically SUPERTILE-LEVEL label swaps between sibling P'/F' pairs, where both siblings are already valid children of the same parent — the multiset is unchanged.
+
+## Mutual Information Saturates After Level 1 for Hat, Immediately for Spectre (#15)
+
+How much does knowing an ancestor's type reduce uncertainty about a base tile's type? We compute H(base | ancestor at level k) via M^k row distributions (M = substitution matrix), then compare to the unconditional entropy H(base).
+
+**Hat (4 types: H/T/P/F):**
+
+Unconditional entropy: **1.762 bits** (stationary: H=50.0%, T=25.0%, P=12.5%, F=12.5%)
+
+| Ancestor level | H(base \| ancestor) | MI gain (bits) | Best accuracy |
+|---------------|---------------------|----------------|---------------|
+| 1 (parent) | 1.548 | **0.214** | 43.4% |
+| 2 (grandparent) | 1.762 | 0.000 | 38.2% |
+| 3 | 1.768 | −0.006 | 38.2% |
+| 4 | 1.768 | −0.006 | 38.2% |
+| 5 | 1.768 | −0.006 | 38.2% |
+| 6 | 1.768 | −0.006 | 38.2% |
+
+**Spectre (2 types: Spectre/Mystic):**
+
+Unconditional entropy: **0.549 bits** (stationary: Spectre=87.3%, Mystic=12.7%)
+
+| Ancestor level | H(base \| ancestor) | MI gain (bits) | Best accuracy |
+|---------------|---------------------|----------------|---------------|
+| 1 (parent) | 0.549 | 0.000 | 87.3% |
+| 2 (grandparent) | 0.549 | 0.000 | 87.3% |
+| 3–6 | 0.549 | 0.000 | 87.3% |
+
+### Key findings
+
+**Hat**: The immediate parent is the only informative ancestor (+0.214 bits, lifting accuracy from 38.2% to 43.4%). Grandparent and all higher ancestors provide zero marginal information — they are indistinguishable from the stationary distribution. Exception: a T'-parent means the base tile is always H (entropy = 0 bits, 100% accuracy), but T' is itself rare.
+
+**Spectre**: No ancestor level provides ANY useful information. The base-tile distribution is already at stationary from the very first level. This follows from spectre's two-type symmetric structure: the substitution rule propagates identity quickly to the stationary distribution.
+
+**Why MI saturates**: The substitution matrix M^k converges to the outer product of stationary×ones as k grows. After one multiplication (k=1 for hat, k=0 for spectre), the row distributions are already near-stationary, so higher ancestors carry no signal above the unconditional entropy.
+
+## Joint Ancestor Knowledge Partially Restores Reconstruction Accuracy (#14)
+
+Knowing BOTH a grandparent and parent simultaneously is more informative than either alone. We compute H(base | level-2 ancestor AND level-1 ancestor) jointly.
+
+**Hat:**
+
+| Scenario | H(base | ...) | Notes |
+|---------|--------------|-------|
+| No ancestry | 1.762 bits | Unconditional entropy |
+| Level-2 ancestor only | 1.768 bits | No improvement (grandparent alone is noise) |
+| Level-1 ancestor only | 1.548 bits | Parent alone: +0.214 bits MI |
+| Level-2 AND level-1 | **0.224 bits** | Joint: **+1.544 bits MI** over grandparent alone |
+
+The dramatic jump (from 1.768→0.224 bits) shows that knowing the parent in addition to the grandparent is hugely informative — even though the grandparent alone is useless. The parent provides strong conditioning; adding the grandparent context further constrains which inflations are compatible.
+
+**Spectre:**
+
+| Scenario | H(base | ...) | Notes |
+|---------|--------------|-------|
+| No ancestry | 0.549 bits | Unconditional entropy |
+| Level-2 ancestor only | 0.549 bits | Grandparent alone: no improvement |
+| Level-1 ancestor only | 0.549 bits | Parent alone: no improvement |
+| Level-2 AND level-1 | **0.070 bits** | Joint: **+0.479 bits MI** over grandparent alone |
+
+Even for spectre — where individual ancestor levels provide zero information — joint (level-2, level-1) knowledge still reduces entropy substantially. The joint distribution over compatible inflation chains narrows the base type more than either marginal can.
+
+### Reconstruction implications
+
+- **Partial ancestry is not worthless**: even though grandparent type alone is random noise for base prediction, combining grandparent with parent provides a strong constraint on compatible inflation paths.
+- **Tree-path context is the right query**: a tiling IOP that queries a ROOT→LEAF path carries more information per query than one that queries unrelated ancestor levels independently.
+- **Hat vs Spectre**: hat has larger absolute MI values because its stationary distribution is more uniform (higher base entropy). Spectre's concentration at Spectre=87.3% means there's little entropy to reduce in the first place.
