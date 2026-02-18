@@ -9,6 +9,7 @@ ark-ff.workspace = true
 ark-serialize.workspace = true
 ark-std.workspace = true
 ark-bls12-381.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

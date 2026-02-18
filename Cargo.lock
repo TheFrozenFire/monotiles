@@ -386,6 +386,7 @@ dependencies = [
  "ark-serialize",
  "ark-std",
  "proptest",
+ "tracing",
 ]
 
 [[package]]
@@ -953,6 +954,7 @@ dependencies = [
  "ark-std",
  "domain",
  "proptest",
+ "tracing",
 ]
 
 [[package]]

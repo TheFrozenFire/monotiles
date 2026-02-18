@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use tracing::info;
+
 use crate::oneway::{
     build_hierarchy, full_sibling_adjacency, type_signature, FlatHierarchy, TypeSignature,
 };
@@ -463,17 +465,17 @@ pub fn analyze_system(
 
 /// Print the gap analysis report.
 pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
-    println!("=== Local-to-Global Gap Analysis ===\n");
+    info!("=== Local-to-Global Gap Analysis ===\n");
 
-    println!("System: {}", analysis.system_name);
-    println!("Depth: {}", analysis.depth);
-    println!("Seed types: {}", analysis.seed_count);
+    info!("System: {}", analysis.system_name);
+    info!("Depth: {}", analysis.depth);
+    info!("Seed types: {}", analysis.seed_count);
     for (i, &count) in analysis.tiles_per_seed.iter().enumerate() {
-        println!("  {} seed: {} base tiles", system.type_name(i), count);
+        info!("  {} seed: {} base tiles", system.type_name(i), count);
     }
 
     // Ancestry
-    println!(
+    info!(
         "\n--- Multi-level ancestry determination (seed {}) ---",
         system.type_name(0)
     );
@@ -489,7 +491,7 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
         let min_str = ar
             .min_radius
             .map_or("?".to_string(), |r| r.to_string());
-        println!(
+        info!(
             "  Level {}: {}/{} determined ({:.1}%) | min_r={}, max_r={}, mean_r={:.2}",
             ar.target_level, ar.tiles_determined, ar.tiles_total, pct, min_str, max_str,
             ar.mean_radius
@@ -497,13 +499,13 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
     }
 
     // Cross-seed distinguishing
-    println!("\n--- Cross-seed distinguishing ---");
-    println!(
+    info!("\n--- Cross-seed distinguishing ---");
+    info!(
         "  {:>6} {:>12} {:>12}",
         "Radius", "Advantage", "Signatures"
     );
     for dr in &analysis.distinguishing {
-        println!(
+        info!(
             "  {:>6} {:>11.1}% {:>12}",
             dr.radius,
             dr.advantage * 100.0,
@@ -512,13 +514,13 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
     }
 
     // Information theory
-    println!("\n--- Information-theoretic analysis ---");
-    println!(
+    info!("\n--- Information-theoretic analysis ---");
+    info!(
         "  {:>6} {:>10} {:>10} {:>10} {:>10}",
         "Radius", "H(sig)", "H(s|sig)", "I(s;sig)", "I/H(s)"
     );
     for it in &analysis.info_theory {
-        println!(
+        info!(
             "  {:>6} {:>10.4} {:>10.4} {:>10.4} {:>10.4}",
             it.radius, it.signature_entropy, it.conditional_entropy, it.mutual_information,
             it.normalized_mi
@@ -526,43 +528,43 @@ pub fn print_report(system: &dyn TilingSystem, analysis: &GapAnalysis) {
     }
 
     // Phase transition
-    println!("\n--- Phase transition ---");
+    info!("\n--- Phase transition ---");
     let pt = &analysis.phase_transition;
-    println!(
+    info!(
         "  Advantage > 50%: {}",
         pt.critical_radius_50
             .map_or("not reached".to_string(), |r| format!("radius {}", r))
     );
-    println!(
+    info!(
         "  Advantage > 99%: {}",
         pt.critical_radius_99
             .map_or("not reached".to_string(), |r| format!("radius {}", r))
     );
-    println!(
+    info!(
         "  Normalized MI > 50%: {}",
         pt.info_critical_50
             .map_or("not reached".to_string(), |r| format!("radius {}", r))
     );
-    println!(
+    info!(
         "  Normalized MI > 99%: {}",
         pt.info_critical_99
             .map_or("not reached".to_string(), |r| format!("radius {}", r))
     );
-    println!("  Sharp transition: {}", pt.is_sharp);
+    info!("  Sharp transition: {}", pt.is_sharp);
 
     // Verdict
-    println!("\n=== VERDICT ===");
+    info!("\n=== VERDICT ===");
     if let Some(r) = pt.critical_radius_99 {
-        println!("The local-to-global gap closes at radius {}.", r);
-        println!("This is an information-theoretic gap, not computational hardness.");
+        info!("The local-to-global gap closes at radius {}.", r);
+        info!("This is an information-theoretic gap, not computational hardness.");
     } else if let Some(r) = pt.critical_radius_50 {
-        println!(
+        info!(
             "The gap partially closes (>50% advantage at radius {}) \
              but does not fully close within the tested radius.",
             r
         );
     } else {
-        println!("The gap persists beyond the tested radius.");
+        info!("The gap persists beyond the tested radius.");
     }
 }
 

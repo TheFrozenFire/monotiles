@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use tracing::{debug, info, info_span};
 
 #[derive(Parser)]
 #[command(name = "monotiles", about = "Monotile tiling experiments")]
@@ -154,6 +155,7 @@ fn main() -> Result<()> {
 }
 
 fn cmd_verify_coxeter() -> Result<()> {
+    let _span = info_span!("verify_coxeter").entered();
     use domain::coxeter::{CoxeterElement, Generator::*};
 
     let alpha = CoxeterElement::generator(Alpha);
@@ -183,18 +185,18 @@ fn cmd_verify_coxeter() -> Result<()> {
         ),
     ];
 
-    println!("Coxeter group Gamma verification:");
+    info!("Coxeter group Gamma verification:");
     let mut all_ok = true;
     for (name, ok) in &checks {
         let status = if *ok { "PASS" } else { "FAIL" };
-        println!("  {}: {}", name, status);
+        info!("  {}: {}", name, status);
         if !*ok {
             all_ok = false;
         }
     }
 
     if all_ok {
-        println!("\nAll 6 Coxeter relations verified.");
+        info!("\nAll 6 Coxeter relations verified.");
     } else {
         anyhow::bail!("Some Coxeter relations failed!");
     }
@@ -207,23 +209,24 @@ fn cmd_verify_coxeter() -> Result<()> {
         alpha.compose(&beta),
         CoxeterElement::new(3, -2, 4, true),
     ];
-    println!("\nInverse verification:");
+    info!("\nInverse verification:");
     for g in &test_elements {
         let g_inv = g.inverse();
         let ok = g.compose(&g_inv) == id && g_inv.compose(g) == id;
-        println!("  {:?} * inverse = id: {}", g, if ok { "PASS" } else { "FAIL" });
+        info!("  {:?} * inverse = id: {}", g, if ok { "PASS" } else { "FAIL" });
     }
 
     Ok(())
 }
 
 fn cmd_cucaracha() -> Result<()> {
+    let _span = info_span!("cucaracha").entered();
     let elements = domain::cucaracha::cucaracha();
     let words = domain::cucaracha::CUCARACHA_WORDS;
 
-    println!("Cucaracha: 16-element aperiodic monotile of Gamma\n");
-    println!("{:<5} {:<25} {:?}", "Idx", "Word", "Normal Form (tx, ty, rot, refl)");
-    println!("{}", "-".repeat(70));
+    info!("Cucaracha: 16-element aperiodic monotile of Gamma\n");
+    info!("{:<5} {:<25} {:?}", "Idx", "Word", "Normal Form (tx, ty, rot, refl)");
+    info!("{}", "-".repeat(70));
 
     for (i, (elem, word)) in elements.iter().zip(words.iter()).enumerate() {
         let word_str = if word.is_empty() {
@@ -238,13 +241,13 @@ fn cmd_cucaracha() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join("")
         };
-        println!(
+        info!(
             "{:<5} {:<25} ({}, {}, {}, {})",
             i, word_str, elem.tx, elem.ty, elem.rotation, elem.reflected
         );
     }
 
-    println!("\nAll elements distinct: {}", {
+    info!("\nAll elements distinct: {}", {
         let unique: std::collections::HashSet<_> = elements.iter().collect();
         unique.len() == 16
     });
@@ -281,6 +284,7 @@ fn resolve_seed(
 }
 
 fn cmd_inflate(seed: &str, levels: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("inflate", seed, levels, system = system_name).entered();
     let system = tiling::systems::resolve_system(system_name)?;
     let seed_idx = resolve_seed(&*system, seed)?;
     let counts = tiling::substitution::generate_counts_system(&*system, seed_idx, levels);
@@ -290,63 +294,65 @@ fn cmd_inflate(seed: &str, levels: usize, system_name: &str) -> Result<()> {
         .map(|i| format!("{:>8}", system.type_name(i)))
         .collect();
 
-    println!(
+    info!(
         "Substitution from seed {} ({}), {} levels:\n",
         system.type_name(seed_idx),
         system.name(),
         levels
     );
-    println!("{:<8} {} {:>10}", "Level", header.join(""), "Total");
-    println!("{}", "-".repeat(18 + 8 * num_types));
+    info!("{:<8} {} {:>10}", "Level", header.join(""), "Total");
+    info!("{}", "-".repeat(18 + 8 * num_types));
 
     for (level, count) in counts.iter().enumerate() {
         let vals: Vec<String> = count.iter().map(|c| format!("{:>8}", c)).collect();
         let total: usize = count.iter().sum();
-        println!("{:<8} {} {:>10}", level, vals.join(""), total);
+        info!("{:<8} {} {:>10}", level, vals.join(""), total);
     }
 
     Ok(())
 }
 
 fn cmd_sturmian(terms: usize) -> Result<()> {
+    let _span = info_span!("sturmian", terms).entered();
     let word = analysis::sturmian::fibonacci_word(terms);
 
-    println!("Fibonacci Sturmian word ({} terms):", terms);
+    info!("Fibonacci Sturmian word ({} terms):", terms);
     let line: String = word.iter().map(|b| if *b == 0 { '0' } else { '1' }).collect();
     for chunk in line.as_bytes().chunks(60) {
-        println!("  {}", std::str::from_utf8(chunk).unwrap());
+        info!("  {}", std::str::from_utf8(chunk).unwrap());
     }
 
-    println!("\nFrequency of 1s: {:.6}", analysis::sturmian::frequency_of_ones(&word));
+    info!("\nFrequency of 1s: {:.6}", analysis::sturmian::frequency_of_ones(&word));
 
     let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
-    println!("Expected (1/phi^2): {:.6}", 1.0 / (phi * phi));
+    info!("Expected (1/phi^2): {:.6}", 1.0 / (phi * phi));
 
-    println!("\nComplexity p(n):");
+    info!("\nComplexity p(n):");
     for n in 1..=10 {
-        println!("  p({}) = {} (expected {})", n, analysis::sturmian::complexity(&word, n), n + 1);
+        info!("  p({}) = {} (expected {})", n, analysis::sturmian::complexity(&word, n), n + 1);
     }
 
     Ok(())
 }
 
 fn cmd_matrix() -> Result<()> {
+    let _span = info_span!("matrix").entered();
     use ark_bls12_381::Fr;
 
     let m = analysis::spectral::hat_substitution_matrix::<Fr>();
     let comp = tiling::metatile::supertile_composition();
 
-    println!("Hat substitution matrix (H, T, P, F):\n");
+    info!("Hat substitution matrix (H, T, P, F):\n");
     let labels = ["H'", "T'", "P'", "F'"];
     for (i, label) in labels.iter().enumerate() {
-        println!(
+        info!(
             "  {} = {}H + {}T + {}P + {}F  (total: {})",
             label, comp[i][0], comp[i][1], comp[i][2], comp[i][3],
             comp[i].iter().sum::<usize>()
         );
     }
 
-    println!("\nDeterminant: {}", if m.determinant() == -Fr::from(1u64) { "-1" } else { "?" });
+    info!("\nDeterminant: {}", if m.determinant() == -Fr::from(1u64) { "-1" } else { "?" });
 
     // Verify characteristic polynomial: lambda^4 - 7*lambda^3 + 7*lambda - 1 = 0
     let id = domain::matrix::Matrix::<Fr>::identity(4);
@@ -356,16 +362,17 @@ fn cmd_matrix() -> Result<()> {
     let result = &(&m4 + &m3.scale(-Fr::from(7u64)))
         + &(&m.scale(Fr::from(7u64)) + &id.scale(-Fr::from(1u64)));
     let is_zero = (0..4).all(|i| (0..4).all(|j| result[(i, j)] == Fr::from(0u64)));
-    println!("Cayley-Hamilton (M^4 - 7M^3 + 7M - I = 0): {}", if is_zero { "VERIFIED" } else { "FAILED" });
+    info!("Cayley-Hamilton (M^4 - 7M^3 + 7M - I = 0): {}", if is_zero { "VERIFIED" } else { "FAILED" });
 
-    println!("\nEigenvalues: phi^4 = (7+3*sqrt(5))/2, 1, -1, (7-3*sqrt(5))/2");
-    println!("  phi^4 ~= 6.854 (area inflation factor)");
-    println!("  phi^2 ~= 2.618 (edge length inflation factor)");
+    info!("\nEigenvalues: phi^4 = (7+3*sqrt(5))/2, 1, -1, (7-3*sqrt(5))/2");
+    info!("  phi^4 ~= 6.854 (area inflation factor)");
+    info!("  phi^2 ~= 2.618 (edge length inflation factor)");
 
     Ok(())
 }
 
 fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
+    let _span = info_span!("deflate", seed, levels).entered();
     let seed_type = match seed.to_uppercase().as_str() {
         "H" => tiling::metatile::MetatileType::H,
         "T" => tiling::metatile::MetatileType::T,
@@ -375,7 +382,7 @@ fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
     };
 
     let patch = tiling::geometry::generate_patch(seed_type, levels);
-    println!(
+    info!(
         "Generated level-{} patch from {:?}: {} metatiles\n",
         levels,
         seed_type,
@@ -383,9 +390,9 @@ fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
     );
 
     let result = tiling::deflation::deflate(&patch);
-    println!("Deflation result (level {} -> level {}):", levels, result.supertile_level);
-    println!("  Supertiles: {}", result.supertiles.len());
-    println!("  Unresolved boundary tiles: {}", result.unresolved.len());
+    info!("Deflation result (level {} -> level {}):", levels, result.supertile_level);
+    info!("  Supertiles: {}", result.supertiles.len());
+    info!("  Unresolved boundary tiles: {}", result.unresolved.len());
 
     // Count supertile types
     let mut type_counts = [0usize; 4];
@@ -397,14 +404,14 @@ fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
             tiling::metatile::MetatileType::F => type_counts[3] += 1,
         }
     }
-    println!(
+    info!(
         "  Type counts: H={}, T={}, P={}, F={}",
         type_counts[0], type_counts[1], type_counts[2], type_counts[3]
     );
 
     // Inflate back and verify round-trip
     let reinflated = tiling::deflation::inflate_patch(&result.supertiles);
-    println!(
+    info!(
         "\nRound-trip: inflate {} supertiles -> {} metatiles (original: {})",
         result.supertiles.len(),
         reinflated.tiles.len(),
@@ -415,8 +422,9 @@ fn cmd_deflate(seed: &str, levels: usize) -> Result<()> {
 }
 
 fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
+    let _span = info_span!("recover", levels, hole_radius).entered();
     let patch = tiling::geometry::generate_patch(tiling::metatile::MetatileType::H, levels);
-    println!(
+    info!(
         "Generated level-{} H-patch: {} metatiles\n",
         levels,
         patch.tiles.len()
@@ -427,30 +435,30 @@ fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
     let (cx, cy) = (center.x, center.y);
     let holey = tiling::recovery::HoleyTiling::erase_region(&patch, cx, cy, hole_radius);
 
-    println!(
+    info!(
         "Erased region: center=({:.3}, {:.3}), radius={:.3}",
         cx, cy, hole_radius
     );
-    println!(
+    info!(
         "  Erased tiles: {}",
         holey.hole_positions.len()
     );
-    println!(
+    info!(
         "  Remaining tiles: {}",
         holey.exterior.tiles.len()
     );
 
     if holey.hole_positions.is_empty() {
-        println!("\nNo tiles in the erased region. Try a larger radius.");
+        info!("\nNo tiles in the erased region. Try a larger radius.");
         return Ok(());
     }
 
     // Recover
     let result = tiling::recovery::recover(&holey);
-    println!("\nRecovery result:");
-    println!("  Deflation levels used: {}", result.deflation_levels);
-    println!("  Recovered tiles: {}", result.recovered_tiles.len());
-    println!("  Success: {}", result.success);
+    info!("\nRecovery result:");
+    info!("  Deflation levels used: {}", result.deflation_levels);
+    info!("  Recovered tiles: {}", result.recovered_tiles.len());
+    info!("  Success: {}", result.success);
 
     // Verify
     let verification = tiling::recovery::verify_recovery(
@@ -458,20 +466,21 @@ fn cmd_recover(levels: usize, hole_radius: f64) -> Result<()> {
         &result.recovered_tiles,
         0.5,
     );
-    println!("\nVerification:");
-    println!("  Original erased: {}", verification.original_count);
-    println!("  Recovered: {}", verification.recovered_count);
-    println!("  Matched: {}", verification.matched);
-    println!(
+    info!("\nVerification:");
+    info!("  Original erased: {}", verification.original_count);
+    info!("  Recovered: {}", verification.recovered_count);
+    info!("  Matched: {}", verification.matched);
+    info!(
         "  Unmatched originals: {}",
         verification.unmatched_originals.len()
     );
-    println!("  Extra recovered: {}", verification.extra_recovered);
+    info!("  Extra recovered: {}", verification.extra_recovered);
 
     Ok(())
 }
 
 fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
+    let _span = info_span!("prove", seed, depth, queries = num_queries).entered();
     use ark_bls12_381::Fr;
     use std::time::Instant;
 
@@ -483,7 +492,7 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
         _ => anyhow::bail!("Unknown seed type: {}. Use H, T, P, or F.", seed),
     };
 
-    println!("Tiling IOP: seed={:?}, depth={}, queries={}\n", seed_type, depth, num_queries);
+    info!("Tiling IOP: seed={:?}, depth={}, queries={}\n", seed_type, depth, num_queries);
 
     // Build hierarchy
     let t0 = Instant::now();
@@ -491,8 +500,8 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
     let build_time = t0.elapsed();
 
     let base_tiles = hierarchy.levels[0].tile_types.len();
-    println!("Hierarchy: {} base tiles, {} levels", base_tiles, depth + 1);
-    println!("  Build time: {:?}", build_time);
+    info!("Hierarchy: {} base tiles, {} levels", base_tiles, depth + 1);
+    info!("  Build time: {:?}", build_time);
 
     // Fill level 0 with deterministic witness values
     for i in 0..base_tiles {
@@ -514,11 +523,11 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
         + total_openings * 32 * 10  // rough estimate: hash path ~10 nodes deep
         + total_openings * 32;  // field elements
 
-    println!("\nProof generated:");
-    println!("  Prove time: {:?}", prove_time);
-    println!("  Commitments: {}", total_commitments);
-    println!("  Total Merkle openings: {}", total_openings);
-    println!("  Est. proof size: ~{:.1} KB", est_proof_size as f64 / 1024.0);
+    info!("\nProof generated:");
+    info!("  Prove time: {:?}", prove_time);
+    info!("  Commitments: {}", total_commitments);
+    info!("  Total Merkle openings: {}", total_openings);
+    info!("  Est. proof size: ~{:.1} KB", est_proof_size as f64 / 1024.0);
 
     // Verify
     let t2 = Instant::now();
@@ -526,20 +535,21 @@ fn cmd_prove(seed: &str, depth: usize, num_queries: usize) -> Result<()> {
     let verify_time = t2.elapsed();
 
     match result {
-        Ok(()) => println!("\nVerification: ACCEPTED ({:?})", verify_time),
-        Err(e) => println!("\nVerification: REJECTED - {} ({:?})", e, verify_time),
+        Ok(()) => info!("\nVerification: ACCEPTED ({:?})", verify_time),
+        Err(e) => info!("\nVerification: REJECTED - {} ({:?})", e, verify_time),
     }
 
     Ok(())
 }
 
 fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("oneway", seed, depth, max_radius, system = system_name).entered();
     use std::time::Instant;
 
     let system = tiling::systems::resolve_system(system_name)?;
     let seed_idx = resolve_seed(&*system, seed)?;
 
-    println!(
+    info!(
         "One-way substitution analysis: system={}, seed={}, depth={}, max_radius={}\n",
         system.name(),
         system.type_name(seed_idx),
@@ -552,31 +562,31 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
     let elapsed = t0.elapsed();
 
     // Hierarchy stats
-    println!("Hierarchy ({:?}):", elapsed);
-    println!(
+    info!("Hierarchy ({:?}):", elapsed);
+    info!(
         "{:<8} {:>10}",
         "Level", "Tiles"
     );
     for (level, &count) in result.tiles_per_level.iter().enumerate() {
-        println!("{:<8} {:>10}", level, count);
+        info!("{:<8} {:>10}", level, count);
     }
 
     // Per-level determination radius with full sibling adjacency
-    println!("\n--- Full sibling adjacency (all siblings mutually adjacent) ---");
+    info!("\n--- Full sibling adjacency (all siblings mutually adjacent) ---");
     for (level, lr) in result.full_sibling.iter().enumerate() {
-        println!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
+        info!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
         if lr.radii_histogram.is_empty() && lr.undetermined == 0 {
-            println!("  (no tiles)");
+            info!("  (no tiles)");
             continue;
         }
         for (&radius, &count) in &lr.radii_histogram {
-            println!("  radius {}: {} tiles", radius, count);
+            info!("  radius {}: {} tiles", radius, count);
         }
         if lr.undetermined > 0 {
-            println!("  undetermined: {} tiles", lr.undetermined);
+            info!("  undetermined: {} tiles", lr.undetermined);
         }
         if let Some(max) = lr.max_radius {
-            println!(
+            info!(
                 "  summary: min={}, max={}, mean={:.2}",
                 lr.min_radius.unwrap(),
                 max,
@@ -586,21 +596,21 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
     }
 
     // Per-level determination radius with inflation adjacency
-    println!("\n--- Intra-supertile inflation adjacency (sparser graph) ---");
+    info!("\n--- Intra-supertile inflation adjacency (sparser graph) ---");
     for (level, lr) in result.inflation_adj.iter().enumerate() {
-        println!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
+        info!("\nLevel {} ({} tiles):", level, result.tiles_per_level[level]);
         if lr.radii_histogram.is_empty() && lr.undetermined == 0 {
-            println!("  (no tiles)");
+            info!("  (no tiles)");
             continue;
         }
         for (&radius, &count) in &lr.radii_histogram {
-            println!("  radius {}: {} tiles", radius, count);
+            info!("  radius {}: {} tiles", radius, count);
         }
         if lr.undetermined > 0 {
-            println!("  undetermined: {} tiles", lr.undetermined);
+            info!("  undetermined: {} tiles", lr.undetermined);
         }
         if let Some(max) = lr.max_radius {
-            println!(
+            info!(
                 "  summary: min={}, max={}, mean={:.2}",
                 lr.min_radius.unwrap(),
                 max,
@@ -610,21 +620,21 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
     }
 
     // Decomposition and deflation
-    println!("\n--- Type-bag decomposition ---");
-    println!(
+    info!("\n--- Type-bag decomposition ---");
+    info!(
         "Base level decomposition count: {} (unique = {})",
         result.base_decomposition_count,
         result.base_decomposition_count == 1
     );
 
-    println!("\n--- Greedy deflation ---");
-    println!("Success rate: {:.1}%", result.greedy_success_rate * 100.0);
+    info!("\n--- Greedy deflation ---");
+    info!("Success rate: {:.1}%", result.greedy_success_rate * 100.0);
 
-    println!("\n--- Local deflation (radius 1, full sibling adj) ---");
-    println!("Unresolved tiles: {}", result.local_deflate_unresolved);
+    info!("\n--- Local deflation (radius 1, full sibling adj) ---");
+    info!("Unresolved tiles: {}", result.local_deflate_unresolved);
 
     // Summary verdict
-    println!("\n=== VERDICT ===");
+    info!("\n=== VERDICT ===");
     let all_determined_full = result.full_sibling.iter().all(|lr| lr.undetermined == 0);
     let max_full_radius = result
         .full_sibling
@@ -636,12 +646,12 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
     let all_determined_infl = result.inflation_adj.iter().all(|lr| lr.undetermined == 0);
 
     if all_determined_full {
-        println!(
+        info!(
             "Full sibling adjacency: LOCALLY SOLVABLE at radius {}",
             max_full_radius
         );
     } else {
-        println!("Full sibling adjacency: REQUIRES GLOBAL CONTEXT (some tiles undetermined)");
+        info!("Full sibling adjacency: REQUIRES GLOBAL CONTEXT (some tiles undetermined)");
     }
 
     if all_determined_infl {
@@ -651,13 +661,13 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
             .filter_map(|lr| lr.max_radius)
             .max()
             .unwrap_or(0);
-        println!(
+        info!(
             "Inflation adjacency: LOCALLY SOLVABLE at radius {}",
             max_infl
         );
     } else {
         let total_undetermined: usize = result.inflation_adj.iter().map(|lr| lr.undetermined).sum();
-        println!(
+        info!(
             "Inflation adjacency: {} tiles undetermined within radius {} \
              (H' supertile is disconnected in inflation graph)",
             total_undetermined, max_radius
@@ -665,34 +675,37 @@ fn cmd_oneway(seed: &str, depth: usize, max_radius: usize, system_name: &str) ->
     }
 
     if result.base_decomposition_count == 1 {
-        println!("Type-bag decomposition: UNIQUE (composition counts fully determine supertile counts)");
+        info!("Type-bag decomposition: UNIQUE (composition counts fully determine supertile counts)");
     } else {
-        println!(
+        info!(
             "Type-bag decomposition: {} valid decompositions",
             result.base_decomposition_count
         );
     }
 
     if all_determined_full && result.base_decomposition_count == 1 {
-        println!("\nConclusion: Deflation is NOT a one-way function.");
-        println!(
+        info!("\nConclusion: Deflation is NOT a one-way function.");
+        info!(
             "The asymmetry is implementation convenience, not computational hardness."
         );
-        println!(
+        info!(
             "Local information (radius {}) suffices to determine parent assignments.",
             max_full_radius
         );
     }
 
+    debug!("\nCompleted in {:?}", elapsed);
+
     Ok(())
 }
 
 fn cmd_gap(depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("gap", depth, max_radius, system = system_name).entered();
     use std::time::Instant;
 
     let system = tiling::systems::resolve_system(system_name)?;
 
-    println!(
+    info!(
         "Local-to-global gap analysis: system={}, depth={}, max_radius={}\n",
         system.name(),
         depth,
@@ -704,17 +717,18 @@ fn cmd_gap(depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
     let elapsed = t0.elapsed();
 
     tiling::gap::print_report(&*system, &analysis);
-    println!("\nCompleted in {:?}", elapsed);
+    debug!("\nCompleted in {:?}", elapsed);
 
     Ok(())
 }
 
 fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> Result<()> {
+    let _span = info_span!("vulnerability", depth, erasure_trials, system = system_name).entered();
     use std::time::Instant;
 
     let system = tiling::systems::resolve_system(system_name)?;
 
-    println!(
+    info!(
         "Vulnerability analysis: system={}, depth={}, erasure_trials={}\n",
         system.name(),
         depth,
@@ -726,60 +740,58 @@ fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> 
     let elapsed = t0.elapsed();
 
     tiling::vulnerability::print_report(&*system, &analysis);
-    println!("\nCompleted in {:?}", elapsed);
+    debug!("\nCompleted in {:?}", elapsed);
 
     Ok(())
 }
 
 fn cmd_fields() -> Result<()> {
+    let _span = info_span!("fields").entered();
     use ark_ff::Field;
     use domain::fields::*;
 
-    println!("Field extension verification over BLS12-381 Fr:\n");
+    info!("Field extension verification over BLS12-381 Fr:\n");
 
     // FrSqrt5
     let sqrt5 = FrSqrt5::new(ark_bls12_381::Fr::from(0u64), ark_bls12_381::Fr::from(1u64));
     let five = FrSqrt5::new(ark_bls12_381::Fr::from(5u64), ark_bls12_381::Fr::from(0u64));
-    println!("  sqrt(5)^2 == 5: {}", sqrt5.square() == five);
+    info!("  sqrt(5)^2 == 5: {}", sqrt5.square() == five);
 
     let phi = golden_ratio();
     let phi_sq = phi.square();
     let phi_plus_one = phi + FrSqrt5::new(ark_bls12_381::Fr::from(1u64), ark_bls12_381::Fr::from(0u64));
-    println!("  phi^2 == phi + 1: {}", phi_sq == phi_plus_one);
-    println!("  phi^2 == hat_inflation(): {}", phi_sq == hat_inflation());
+    info!("  phi^2 == phi + 1: {}", phi_sq == phi_plus_one);
+    info!("  phi^2 == hat_inflation(): {}", phi_sq == hat_inflation());
 
     // FrSqrt15
     let sqrt15 = FrSqrt15::new(ark_bls12_381::Fr::from(0u64), ark_bls12_381::Fr::from(1u64));
     let fifteen = FrSqrt15::new(ark_bls12_381::Fr::from(15u64), ark_bls12_381::Fr::from(0u64));
-    println!("  sqrt(15)^2 == 15: {}", sqrt15.square() == fifteen);
+    info!("  sqrt(15)^2 == 15: {}", sqrt15.square() == fifteen);
 
     // Inverse round-trips
     let a = FrSqrt5::new(ark_bls12_381::Fr::from(7u64), ark_bls12_381::Fr::from(3u64));
     let a_inv = a.inverse().expect("nonzero invertible");
-    println!("  FrSqrt5 inverse round-trip: {}", a * a_inv == FrSqrt5::ONE);
+    info!("  FrSqrt5 inverse round-trip: {}", a * a_inv == FrSqrt5::ONE);
 
     let b = FrSqrt15::new(ark_bls12_381::Fr::from(11u64), ark_bls12_381::Fr::from(2u64));
     let b_inv = b.inverse().expect("nonzero invertible");
-    println!("  FrSqrt15 inverse round-trip: {}", b * b_inv == FrSqrt15::ONE);
+    info!("  FrSqrt15 inverse round-trip: {}", b * b_inv == FrSqrt15::ONE);
 
-    println!("\nAll field properties verified.");
+    info!("\nAll field properties verified.");
     Ok(())
 }
 
 fn cmd_group_crypto(experiment: &str, max_size: usize, trials: usize) -> Result<()> {
-    use std::time::Instant;
+    let _span = info_span!("group_crypto", experiment, max_size, trials).entered();
 
-    println!(
+    info!(
         "Group cryptography analysis: experiment={}, max_size={}, trials={}\n",
         experiment, max_size, trials
     );
 
-    let t0 = Instant::now();
     let analysis = domain::group_crypto::analyze_experiments(max_size, trials, experiment);
-    let elapsed = t0.elapsed();
 
     domain::group_crypto::print_report(&analysis);
-    println!("\nCompleted in {:?}", elapsed);
 
     Ok(())
 }

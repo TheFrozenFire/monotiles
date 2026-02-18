@@ -2,6 +2,7 @@ use crate::coxeter::CoxeterElement;
 use crate::cucaracha::{cucaracha, expand_by_generators, Cotiler};
 use std::collections::HashSet;
 use std::time::Instant;
+use tracing::{info, debug, trace, info_span, debug_span};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -94,6 +95,7 @@ pub struct RecoveryResult {
     pub unique_fraction: f64,
     pub mean_solutions: f64,
     pub mean_time_ms: f64,
+    pub budget_exceeded: bool,
 }
 
 /// Attempt to recover a cotiler from its cotiler group generators.
@@ -101,17 +103,18 @@ pub struct RecoveryResult {
 /// Fixes c_0 = identity (translation normalization), then BFS-expands the
 /// generated group to find candidate positions. Checks each candidate subset
 /// of the right size that generates exactly the same G_C.
+/// Returns `(solutions, budget_exceeded)`.
 pub fn recover_cotiler(
     generators: &[CoxeterElement],
     target_size: usize,
     max_solutions: usize,
-) -> Vec<Cotiler> {
+) -> (Vec<Cotiler>, bool) {
     if target_size == 0 {
-        return vec![];
+        return (vec![], false);
     }
     if target_size == 1 {
         // Single-tile cotiler has no generators; recovery is trivially the identity
-        return vec![Cotiler::new(vec![CoxeterElement::identity()])];
+        return (vec![Cotiler::new(vec![CoxeterElement::identity()])], false);
     }
 
     // BFS-expand from generators to find candidate group elements
@@ -165,11 +168,13 @@ pub fn recover_cotiler(
         .collect();
     candidates.sort_by(|a, b| coxeter_sort_key(a).partial_cmp(&coxeter_sort_key(b)).unwrap());
 
-    eprintln!(
-        "  [recover] target_size={}, group_expanded={}, valid_candidates={}, search_space~=C({},{})",
+    let _span = debug_span!("recover_cotiler", target_size, candidates = candidates.len()).entered();
+
+    debug!(
         target_size,
-        group_elements.len(),
-        candidates.len(),
+        group_expanded = group_elements.len(),
+        valid_candidates = candidates.len(),
+        "recovery search space ~= C({}, {})",
         candidates.len(),
         target_size - 1,
     );
@@ -180,6 +185,7 @@ pub fn recover_cotiler(
     let mut covered: HashSet<_> = tile.iter().copied().collect();
 
     let mut nodes_visited = 0u64;
+    let mut budget_exceeded = false;
 
     fn backtrack(
         candidates: &[CoxeterElement],
@@ -192,10 +198,20 @@ pub fn recover_cotiler(
         tile: &[CoxeterElement; 16],
         start_idx: usize,
         nodes_visited: &mut u64,
+        budget_exceeded: &mut bool,
     ) {
         *nodes_visited += 1;
+        if *nodes_visited >= 10_000_000 {
+            *budget_exceeded = true;
+            return;
+        }
         if *nodes_visited % 1_000_000 == 0 {
-            eprintln!("  [recover] nodes visited: {}M, depth={}/{}", *nodes_visited / 1_000_000, current.len(), target_size);
+            trace!(
+                nodes_millions = *nodes_visited / 1_000_000,
+                depth = current.len(),
+                target_size,
+                "recovery backtrack progress",
+            );
         }
         if solutions.len() >= max_solutions {
             return;
@@ -213,7 +229,7 @@ pub fn recover_cotiler(
         }
 
         for i in start_idx..candidates.len() {
-            if solutions.len() >= max_solutions {
+            if solutions.len() >= max_solutions || *budget_exceeded {
                 return;
             }
             let g = candidates[i];
@@ -242,6 +258,7 @@ pub fn recover_cotiler(
                 tile,
                 i + 1,
                 nodes_visited,
+                budget_exceeded,
             );
 
             current.pop();
@@ -262,18 +279,35 @@ pub fn recover_cotiler(
         &tile,
         0,
         &mut nodes_visited,
+        &mut budget_exceeded,
     );
 
-    eprintln!("  [recover] done: {} nodes visited, {} solutions", nodes_visited, solutions.len());
-    solutions
+    if budget_exceeded {
+        debug!(
+            nodes_visited,
+            solutions = solutions.len(),
+            "recovery budget exceeded (10M nodes)",
+        );
+    }
+
+    debug!(
+        nodes_visited,
+        solutions = solutions.len(),
+        budget_exceeded,
+        "recovery search complete",
+    );
+    (solutions, budget_exceeded)
 }
 
 pub fn recovery_experiment(size: usize, trials: usize) -> RecoveryResult {
+    let _span = info_span!("recovery_experiment", size).entered();
+
     let mut rng = 0xDEAD_BEEF_u64;
     let mut total_solutions = 0usize;
     let mut total_time_ms = 0.0f64;
     let mut unique_count = 0usize;
     let mut actual_trials = 0usize;
+    let mut any_budget_exceeded = false;
 
     for _ in 0..trials {
         let seed = CoxeterElement::identity();
@@ -286,9 +320,13 @@ pub fn recovery_experiment(size: usize, trials: usize) -> RecoveryResult {
         let generators = cotiler.cotiler_group_generators();
 
         let t0 = Instant::now();
-        let solutions = recover_cotiler(&generators, size, 16);
+        let (solutions, trial_budget_exceeded) = recover_cotiler(&generators, size, 16);
         let elapsed = t0.elapsed();
         total_time_ms += elapsed.as_secs_f64() * 1000.0;
+
+        if trial_budget_exceeded {
+            any_budget_exceeded = true;
+        }
 
         total_solutions += solutions.len();
         if solutions.len() == 1 {
@@ -303,6 +341,7 @@ pub fn recovery_experiment(size: usize, trials: usize) -> RecoveryResult {
         unique_fraction: unique_count as f64 / n,
         mean_solutions: total_solutions as f64 / n,
         mean_time_ms: total_time_ms / n,
+        budget_exceeded: any_budget_exceeded,
     }
 }
 
@@ -327,6 +366,8 @@ pub fn decompose_region(
     target_size: usize,
     max_solutions: usize,
 ) -> Vec<Cotiler> {
+    let _span = debug_span!("decompose_region", target_size, cells = cells.len()).entered();
+
     let tile = cucaracha();
     let inv_offsets: Vec<CoxeterElement> = tile.iter().map(|c| c.inverse()).collect();
 
@@ -417,6 +458,8 @@ pub fn decompose_region(
 }
 
 pub fn decomposition_experiment(size: usize, trials: usize) -> DecompositionResult {
+    let _span = info_span!("decomposition_experiment", size).entered();
+
     let mut rng = 0xCAFE_BABE_u64;
     let mut total_solutions = 0usize;
     let mut total_first_time_ms = 0.0f64;
@@ -467,6 +510,8 @@ pub struct StabilizerResult {
 }
 
 pub fn stabilizer_experiment(size: usize, trials: usize) -> StabilizerResult {
+    let _span = info_span!("stabilizer_experiment", size).entered();
+
     let mut rng = 0xFACE_FEED_u64;
     let mut trivial = 0usize;
     let mut threefold = 0usize;
@@ -528,15 +573,15 @@ pub fn analyze_experiments(
 
     for size in 1..=max_size {
         if run_recovery {
-            println!("  recovery size={}...", size);
+            debug!(size, "running recovery experiment");
             recovery.push(recovery_experiment(size, trials));
         }
         if run_decomposition {
-            println!("  decomposition size={}...", size);
+            debug!(size, "running decomposition experiment");
             decomposition.push(decomposition_experiment(size, trials));
         }
         if run_stabilizer {
-            println!("  stabilizer size={}...", size);
+            debug!(size, "running stabilizer experiment");
             stabilizer.push(stabilizer_experiment(size, trials));
         }
     }
@@ -551,20 +596,20 @@ pub fn analyze_experiments(
 }
 
 pub fn print_report(analysis: &GroupCryptoAnalysis) {
-    println!("\n=== Group Cryptography Analysis ===");
-    println!(
+    info!("\n=== Group Cryptography Analysis ===");
+    info!(
         "max_size={}, trials={}\n",
         analysis.max_size, analysis.trials
     );
 
     if !analysis.recovery.is_empty() {
-        println!("--- Cotiler Recovery ---");
-        println!(
+        info!("--- Cotiler Recovery ---");
+        info!(
             "{:<6} {:>8} {:>12} {:>14} {:>12}",
             "Size", "Trials", "Unique%", "MeanSolutions", "MeanTime(ms)"
         );
         for r in &analysis.recovery {
-            println!(
+            info!(
                 "{:<6} {:>8} {:>11.1}% {:>14.2} {:>12.2}",
                 r.size,
                 r.trials,
@@ -573,17 +618,17 @@ pub fn print_report(analysis: &GroupCryptoAnalysis) {
                 r.mean_time_ms,
             );
         }
-        println!();
+        info!("");
     }
 
     if !analysis.decomposition.is_empty() {
-        println!("--- Region Decomposition (Exact Cover) ---");
-        println!(
+        info!("--- Region Decomposition (Exact Cover) ---");
+        info!(
             "{:<6} {:>8} {:>14} {:>14} {:>10}",
             "Size", "Trials", "MeanSolutions", "MeanTime(ms)", "AllFound"
         );
         for d in &analysis.decomposition {
-            println!(
+            info!(
                 "{:<6} {:>8} {:>14.2} {:>14.2} {:>10}",
                 d.size,
                 d.trials,
@@ -592,32 +637,32 @@ pub fn print_report(analysis: &GroupCryptoAnalysis) {
                 if d.all_found { "yes" } else { "NO" },
             );
         }
-        println!();
+        info!("");
     }
 
     if !analysis.stabilizer.is_empty() {
-        println!("--- Stabilizer Statistics ---");
-        println!(
+        info!("--- Stabilizer Statistics ---");
+        info!(
             "{:<6} {:>8} {:>10} {:>12}",
             "Size", "Trials", "Trivial", "Threefold"
         );
         for s in &analysis.stabilizer {
-            println!(
+            info!(
                 "{:<6} {:>8} {:>10} {:>12}",
                 s.size, s.trials, s.trivial_count, s.threefold_count,
             );
         }
-        println!();
+        info!("");
     }
 
     // Scaling summary
-    println!("--- Scaling Summary ---");
+    info!("--- Scaling Summary ---");
     if analysis.recovery.len() >= 2 {
         let first = &analysis.recovery[0];
         let last = analysis.recovery.last().unwrap();
         if first.mean_time_ms > 0.0 {
             let ratio = last.mean_time_ms / first.mean_time_ms;
-            println!(
+            info!(
                 "Recovery time ratio (size {} vs {}): {:.1}x",
                 last.size, first.size, ratio,
             );
@@ -628,7 +673,7 @@ pub fn print_report(analysis: &GroupCryptoAnalysis) {
         let last = analysis.decomposition.last().unwrap();
         if first.mean_first_time_ms > 0.0 {
             let ratio = last.mean_first_time_ms / first.mean_first_time_ms;
-            println!(
+            info!(
                 "Decomposition time ratio (size {} vs {}): {:.1}x",
                 last.size, first.size, ratio,
             );
@@ -636,7 +681,7 @@ pub fn print_report(analysis: &GroupCryptoAnalysis) {
     }
 
     // Verdict
-    println!("\n=== VERDICT ===");
+    info!("\n=== VERDICT ===");
 
     let recovery_easy = analysis
         .recovery
@@ -652,34 +697,34 @@ pub fn print_report(analysis: &GroupCryptoAnalysis) {
         .all(|s| s.trivial_count >= s.trials / 2);
 
     if recovery_easy {
-        println!("Cotiler recovery: EASY at tested sizes (all < 1s)");
+        info!("Cotiler recovery: EASY at tested sizes (all < 1s)");
     } else {
-        println!("Cotiler recovery: shows scaling — candidate for hardness");
+        info!("Cotiler recovery: shows scaling — candidate for hardness");
     }
 
     if decomp_easy {
-        println!("Region decomposition: EASY at tested sizes (all < 1s)");
+        info!("Region decomposition: EASY at tested sizes (all < 1s)");
     } else {
-        println!("Region decomposition: shows scaling — candidate for hardness");
+        info!("Region decomposition: shows scaling — candidate for hardness");
     }
 
     if mostly_trivial_stab {
-        println!("Stabilizer: mostly trivial (good for cryptographic applications)");
+        info!("Stabilizer: mostly trivial (good for cryptographic applications)");
     } else {
-        println!("Stabilizer: significant threefold symmetry (reduces key space)");
+        info!("Stabilizer: significant threefold symmetry (reduces key space)");
     }
 
     let viable = !recovery_easy || !decomp_easy;
     if viable {
-        println!("\nConclusion: At least one problem shows super-linear scaling.");
-        println!("Further investigation at larger sizes warranted.");
+        info!("\nConclusion: At least one problem shows super-linear scaling.");
+        info!("Further investigation at larger sizes warranted.");
     } else {
-        println!("\nConclusion: All problems appear easy at tested sizes.");
-        println!(
+        info!("\nConclusion: All problems appear easy at tested sizes.");
+        info!(
             "The virtually abelian structure of Gamma = Z^2 x| D_6 likely makes"
         );
-        println!("group-theoretic hard problems tractable. The tiling constraint");
-        println!("does not appear to inject sufficient hardness at these scales.");
+        info!("group-theoretic hard problems tractable. The tiling constraint");
+        info!("does not appear to inject sufficient hardness at these scales.");
     }
 }
 
@@ -727,7 +772,7 @@ mod tests {
         let cotiler = grow_cotiler(seed, 2, &mut rng).unwrap();
         let generators = cotiler.cotiler_group_generators();
 
-        let solutions = recover_cotiler(&generators, 2, 8);
+        let (solutions, _budget_exceeded) = recover_cotiler(&generators, 2, 8);
         assert!(!solutions.is_empty(), "should find at least one recovery");
 
         // Each solution should generate the same G_C
@@ -748,7 +793,7 @@ mod tests {
         let cotiler = grow_cotiler(seed, 3, &mut rng).unwrap();
         let generators = cotiler.cotiler_group_generators();
 
-        let solutions = recover_cotiler(&generators, 3, 4);
+        let (solutions, _budget_exceeded) = recover_cotiler(&generators, 3, 4);
         assert!(
             !solutions.is_empty(),
             "should find at least one recovery for size 3"
