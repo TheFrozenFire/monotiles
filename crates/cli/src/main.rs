@@ -119,6 +119,9 @@ enum Commands {
         /// Tiling system: hat, spectre, or hat-turtle
         #[arg(short = 'S', long, default_value = "hat")]
         system: String,
+        /// Skip O(n²) dependency graph construction (use for depth ≥ 5)
+        #[arg(long, default_value_t = false)]
+        skip_graph: bool,
     },
 
     /// Measure minimum modification distance (detecting-code strength)
@@ -267,7 +270,7 @@ fn main() -> Result<()> {
         Commands::Recover { levels, hole_radius } => cmd_recover(levels, hole_radius),
         Commands::Oneway { seed, depth, max_radius, system } => cmd_oneway(&seed, depth, max_radius, &system),
         Commands::Gap { depth, max_radius, system } => cmd_gap(depth, max_radius, &system),
-        Commands::Vulnerability { depth, erasure_trials, system } => cmd_vulnerability(depth, erasure_trials, &system),
+        Commands::Vulnerability { depth, erasure_trials, system, skip_graph } => cmd_vulnerability(depth, erasure_trials, &system, skip_graph),
         Commands::ModificationDistance { depth, system } => cmd_modification_distance(depth, &system),
         Commands::GeometricModificationDistance { system } => cmd_geometric_modification_distance(&system),
         Commands::CanonicalCheck { depth, system } => cmd_canonical_check(depth, &system),
@@ -848,7 +851,7 @@ fn cmd_gap(depth: usize, max_radius: usize, system_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> Result<()> {
+fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str, skip_graph: bool) -> Result<()> {
     let _span = info_span!("vulnerability", depth, erasure_trials, system = system_name).entered();
     use std::time::Instant;
 
@@ -862,7 +865,7 @@ fn cmd_vulnerability(depth: usize, erasure_trials: usize, system_name: &str) -> 
     );
 
     let t0 = Instant::now();
-    let analysis = tiling::vulnerability::analyze_system(&*system, 0, depth, erasure_trials);
+    let analysis = tiling::vulnerability::analyze_system(&*system, 0, depth, erasure_trials, skip_graph);
     let elapsed = t0.elapsed();
 
     tiling::vulnerability::print_report(&*system, &analysis);

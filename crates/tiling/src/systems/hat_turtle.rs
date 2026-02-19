@@ -129,8 +129,8 @@ mod tests {
         let hat = HatSystem::new();
         let ht = HatTurtleSystem::default();
 
-        let hat_v = analyze_system(&hat, 0, 2, 10);
-        let ht_v = analyze_system(&ht, 0, 2, 10);
+        let hat_v = analyze_system(&hat, 0, 2, 10, false);
+        let ht_v = analyze_system(&ht, 0, 2, 10, false);
 
         assert_eq!(hat_v.swaps.len(), ht_v.swaps.len());
         assert_eq!(hat_v.criticality.len(), ht_v.criticality.len());

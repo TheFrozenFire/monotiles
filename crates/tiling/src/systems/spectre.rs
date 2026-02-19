@@ -225,7 +225,7 @@ mod tests {
     fn spectre_vulnerability_runs() {
         use crate::vulnerability::analyze_system;
         let sys = SpectreSystem::new();
-        let analysis = analyze_system(&sys, 0, 2, 10);
+        let analysis = analyze_system(&sys, 0, 2, 10, false);
         // Basic sanity checks
         assert!(analysis.base_tiles > 0);
         assert!(!analysis.determining_sets.is_empty());
