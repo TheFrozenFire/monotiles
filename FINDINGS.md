@@ -40,6 +40,7 @@ Empirical results from running experiments on the hat monotile and its algebraic
   - [Geometric Tile Placement: Position-as-Key Adds Only ~7% Proof Size Overhead (#28)](#geometric-tile-placement-position-as-key-adds-only-7-proof-size-overhead-28)
   - [IOP Canonical Form Defense: Zero-Cost Enforcement (#33)](#iop-canonical-form-defense-zero-cost-enforcement-33)
   - [Sparse Merkle Tree Commitment: Compact Key Has ~5-7 Hash Overhead, Enables Non-Membership Proofs (#37)](#sparse-merkle-tree-commitment-compact-key-has-5-7-hash-overhead-enables-non-membership-proofs-37)
+  - [Semantic Geometric IOP: Spectre Adjacency Is Local, Hat Requires Cross-Supertile Openings (#39)](#semantic-geometric-iop-spectre-adjacency-is-local-hat-requires-cross-supertile-openings-39)
   - [Spectral Gap Ratio and Convergence Rates (#51)](#spectral-gap-ratio-and-convergence-rates-51)
 - [Algebraic Number Theory (CAS Results)](#algebraic-number-theory-cas-results)
   - [Characteristic Polynomial, Minimal Polynomial, and Galois Group (#49)](#characteristic-polynomial-minimal-polynomial-and-galois-group-49)
@@ -1346,6 +1347,83 @@ These guarantees are impossible with a dense Merkle tree over a tile index list.
 - The overhead is small (~5–7 hashes) and approximately constant across depths — both path lengths grow linearly at nearly the same rate.
 - The Coxeter (132-bit) or SHA-256 (256-bit) fixed-width keys have crossover depths of 44+ and 86+ respectively, both impractical for this problem.
 - The practical question (#37) is not proof size: it is whether non-membership proofs are needed. If gap-free coverage checking is a requirement, compact-key SMT is the right data structure with modest proof overhead.
+
+---
+
+### Semantic Geometric IOP: Spectre Adjacency Is Local, Hat Requires Cross-Supertile Openings (#39)
+
+**Setup:** Code analysis of `crates/tiling/src/metatile.rs`, `systems/hat.rs`, `systems/spectre.rs`, and IOP prover/verifier.
+
+#### Boundary children: the structural asymmetry
+
+The core difference is encoded in `boundary_children()`:
+
+| System | Boundary children | Count |
+|--------|------------------|-------|
+| Hat | Rule indices 5, 12, 13, 14, 17, 18, 19 | 7 |
+| Spectre | (empty) | 0 |
+
+The hat inflation has 29 rule indices (0–28). Of these, 22 are assigned to supertiles (H→10, T→1, P→5, F→6 children). The 7 boundary children are F-type tiles that appear at supertile interfaces — they are geometrically adjacent to tiles in two different parent supertiles.
+
+Spectre's inflation assigns ALL child tiles cleanly within supertiles. There are no shared edges between parent supertile boundaries.
+
+#### Current IOP verification (from prover/verifier code)
+
+The current IOP verifies:
+1. **Merkle inclusion**: supertile and each child are in the committed tree
+2. **Composition**: child type counts match the supertile's template (multiset check)
+3. **Fold consistency**: children fold to the claimed supertile value under random challenge
+
+What is **not** currently verified:
+- Geometric tile positions
+- Canonical slot order (which child occupies which position)
+- Edge adjacency between supertile boundaries
+
+The canonical check (#33) adds slot-position type consistency at zero overhead. Position-as-key (#28) adds ~7% size overhead to commit each tile's geometric position.
+
+#### Is edge-adjacency a local check?
+
+**Spectre:** With canonical check + position-as-key, edge-adjacency is **fully local**.
+- Opening `(parent_key, child_slot_i)` for all children of a parent reveals the full intra-supertile adjacency graph
+- All 8 (or 7) children of Spectre' (or Mystic') are mutually adjacent within the supertile
+- No tile appears in two parent supertiles simultaneously
+- Therefore: verifying that a tile is correctly positioned relative to all its neighbors requires **only the opened parent cluster** — zero cross-supertile openings
+
+**Hat:** Edge-adjacency is **non-local** for boundary children.
+- Opening `(parent_key, child_slots)` for a hat supertile reveals only the 10 (H), 1 (T), 5 (P), or 6 (F) intra-supertile children
+- The 7 boundary F-type children (rule positions 5, 12, 13, 14, 17, 18, 19) sit at supertile interfaces
+- Verifying that a boundary F tile is geometrically consistent requires opening the **adjacent supertile** at the same level
+- Each query that touches a boundary F child needs 1 additional cross-supertile opening
+
+#### Fake hierarchy analysis
+
+Can a cheating prover create a semantically invalid hierarchy that passes canonical check + position-as-key?
+
+- **Spectre:** No. With 0 boundary children, canonical + position-as-key fully constrain the geometry. There are no degrees of freedom for a cheating prover to exploit: each child's type, position, and adjacency relationship to all siblings is uniquely determined. The hierarchy is either valid or it fails one of these checks.
+
+- **Hat:** Yes. A cheating prover could place 7 boundary F children with consistent types and positions within their immediate parent, but with inconsistent cross-supertile adjacency. The boundary F children's positions relative to the neighboring supertile are not captured by the parent's cluster alone. The adjacency check (cross-supertile opening) closes this gap.
+
+#### IOP proof size implications
+
+| System | Adjacency check overhead | Cross-supertile openings |
+|--------|--------------------------|------------------------|
+| Spectre | 0 extra openings | 0 |
+| Hat | Up to 7 extra supertile openings per query touching a boundary child | 7 out of 29 rule positions = 24% of queries may need 1 extra opening |
+
+This is the **first concrete proof-structure advantage for spectre over hat** in the IOP setting: a semantic geometric IOP for spectre is achievable with canonical + position-as-key at zero extra query cost, while the same for hat requires cross-supertile openings for ~24% of queries at each level.
+
+#### Spectre Z₂ orientation grading
+
+The spectre substitution reverses all tile orientations at each level. Each child's angle is determined by the parent's angle and the child's slot. With position-as-key encoding `(x, y, angle)`, the Z₂ grading is already captured — it adds no additional checkable constraint beyond position-as-key.
+
+#### Conclusions
+
+- Spectre edge-adjacency is **purely local**: canonical check + position-as-key (already established in #28 and #33) are sufficient. Zero additional IOP overhead.
+- Hat edge-adjacency is **non-local** for the 7 boundary F children: cross-supertile openings required, affecting ~24% of queries.
+- A cheating prover has zero degrees of freedom in spectre (canonical + position-as-key fully constrains the geometry). Hat has a non-trivial attack surface at supertile boundaries.
+- The semantic geometric IOP advantage for spectre is structural, not incidental: it follows directly from the 0 vs 7 boundary children count established in #30.
+
+_See also: #28 (position-as-key ~7% overhead), #33 (canonical form zero-cost enforcement), #30 (boundary children as modification attack surface)._
 
 ---
 
