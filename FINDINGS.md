@@ -817,7 +817,7 @@ Every non-trivial supertile type contributes exactly 20% swap-vulnerable pairs. 
 
 Verified computationally: all levels at all depths 2–6 give exactly 0.2000.
 
-#### Spectre: converges to ~25.37%
+#### Spectre: converges to (5+√15)/35 ≈ 25.35%
 
 Spectre's two types have different local densities:
 
@@ -826,11 +826,15 @@ Spectre's two types have different local densities:
 | Spectre' | 8 | 7×1 = 7 | 28 | 25.00% |
 | Mystic' | 7 | 6×1 = 6 | 21 | 28.57% |
 
-The overall density at each level depends on the S':M' ratio at the level above. This ratio converges to the dominant eigenvector ratio (3+2√3):1 ≈ 6.464:1, giving asymptotic density:
+The overall density at each level depends on the S':M' ratio at the level above. This ratio converges to the left PF eigenvector ratio **(√15+3):1 ≈ 6.873:1** (the left eigenvector is (S:M) = (6:√15−3), so S/M = 6/(√15−3) = √15+3). Substituting r = √15+3:
 
-**f* = (6.464×7 + 6) / (6.464×28 + 21) = 51.25/202.0 ≈ 25.37%**
+**f\* = (7r+6)/(28r+21) = (7√15+27)/(28√15+105) = (5+√15)/35 ≈ 25.35%**
 
-Observed convergence: depth-2 level-1 = 25.00%, depth-3 level-1 = 25.35%, depth-4+ level-1 = 25.35% (converged to 4 decimal places).
+(Rationalization: multiply by (28√15−105)/(28√15−105); denominator = 784×15−105² = 735; numerator = 105+21√15 = 21(5+√15); so f\* = 21(5+√15)/735 = (5+√15)/35.)
+
+Observed convergence: depth-2 level-1 = 25.00%, depth-3 level-1 = 25.35%, depth-4+ level-1 = 25.35% (converged to 4 decimal places — matches exact form).
+
+_Note: an earlier version of this section incorrectly stated the eigenvector ratio as (3+2√3):1 ≈ 6.464 (Q(√3)). The correct ratio is (√15+3):1 ≈ 6.873 (Q(√15)). The two are numerically close (~0.4 apart) which is why the approximate 25.37% figure was plausible, but the exact closed form is (5+√15)/35, not (27+14√3)/(105+56√3). Corrected by CAS #54 (cas/54b_spectre_swap_exact.gp)._
 
 #### Implication
 
@@ -1414,7 +1418,7 @@ The compositum has class number 1 despite containing Q(√15) (class number 2): 
 
 ### Exact Tile Frequencies and Swap Density Closed Forms (#54)
 
-**Setup:** `cas/54_swap_density.gp`
+**Setup:** `cas/54_swap_density.gp`, `cas/54b_spectre_swap_exact.gp`
 
 #### Asymptotic tile frequencies (exact, in Q(√5))
 
@@ -1450,24 +1454,71 @@ Growth ratio ≈ 6.854 per level ✓
 | Spectre | 6 | 0.8730 |
 | Mystic | √15 − 3 | 0.1270 |
 
-Sum = 3 + √15 ≈ 6.873 (normalized to 1, f_S ≈ 0.873, f_M ≈ 0.127).
+Sum = 3 + √15 ≈ 6.873. Asymptotic S'/M' ratio = 6/(√15−3) = **√15+3 ≈ 6.873**.
 
-#### Swap density closed forms
+#### Exact swap density closed forms
 
-The empirical swap densities from #36 (~20% hat, ~25.4% spectre) are not simply 2·f_P·f_F or 2·f_S·f_M:
+The swap density formula counts (swap pairs from this parent type) / (total sibling pairs from this parent), weighted by the asymptotic parent-type frequency.
 
-| Formula | Hat | Spectre |
-|---------|-----|---------|
-| 2·f_A·f_B | 2·f_P·f_F = 2(−6+3√5)·(9−3√5)/2 / 9 ≈ **0.180** | 2·f_S·f_M = 14√15−54 ≈ **0.222** |
-| Empirical (#36) | ~0.20 | ~0.254 |
+**Hat: exactly 1/5 for all depths and levels (∈ Q)**
 
-The gap indicates the empirical definition counts something more specific (e.g., sibling pairs in the same supertile, weighted by supertile frequency) rather than just the product of marginal frequencies. The exact closed forms are candidates; confirming the exact formula requires cross-referencing with the vulnerability experiment definition.
+Every non-trivial hat parent type contributes exactly 1/5:
+
+| Parent | Children n | P'×F' pairs | C(n,2) | Density |
+|--------|-----------|-------------|--------|---------|
+| H' | 10 | 3×3=9 | 45 | **1/5** |
+| P' | 5 | 1×2=2 | 10 | **1/5** |
+| F' | 6 | 1×3=3 | 15 | **1/5** |
+
+Since the density is identical for every contributing type, the overall density is exactly **1/5** regardless of depth or mix — algebraically constant.
+
+**Spectre: (5+√15)/35 ≈ 25.35% (∈ Q(√15))**
+
+Using the asymptotic S'/M' ratio r = √15+3:
+
+```
+f* = (7r + 6) / (28r + 21)           [7 swap pairs per S', 6 per M'; 28/21 total]
+   = (7(√15+3) + 6) / (28(√15+3) + 21)
+   = (7√15 + 27) / (28√15 + 105)
+   = (5 + √15) / 35                   [after rationalizing: ÷ 735, simplify]
+   ≈ 0.25351
+```
+
+Minimal polynomial of f*: **245x² − 70x + 2** (irreducible over Q; discriminant = 2940 = 4·3·5·49; conjugate (5−√15)/35 ≈ 0.032).
+
+**Number-theoretic field distinction:**
+
+| System | Swap density | Field | Notes |
+|--------|-------------|-------|-------|
+| Hat | 1/5 | Q | Rational; depth-independent |
+| Spectre | (5+√15)/35 | Q(√15) | Irrational; Q(f*) = Q(λ_spe) |
+
+The spectre swap density lives in the same field as the Perron eigenvalue — the algebraic structure of the tiling's dynamics is encoded directly in its security constant.
+
+#### Tile count sequences mod p
+
+Bad primes (where M has a repeated eigenvalue mod p = divisors of disc(charpoly)):
+- Hat disc = 364500 = 2²·3⁶·5³ → bad primes: **2, 3, 5**
+- Spectre disc = 60 = 2²·3·5 → bad primes: **2, 3, 5**
+
+Observed periods of total tile count mod p (hat, starting from single H):
+
+| Prime p | Period | Notes |
+|---------|--------|-------|
+| 2 | 3 | [0,1,1,0,1,1,...] — bad prime |
+| 3 | 6 | [2,0,0,2,1,1,...] — bad prime |
+| 5 | 10 | bad prime, longer period |
+| 7 | 4 | good prime |
+| 11 | 10 | good prime |
+
+BLS12-381 prime does **not** divide either discriminant → good prime for both systems.
 
 #### Conclusions
 
-- The exact tile frequencies are algebraic numbers in Q(√5) and Q(√15) respectively.
-- Hat frequencies sum to 3 (integer); spectre frequencies sum to 3+√15 (irrational but algebraic).
-- The swap density exact formula awaits matching the precise experimental definition from #36.
+- Hat swap density = **1/5** exactly (rational, purely combinatorial, depth-independent).
+- Spectre swap density = **(5+√15)/35** exactly (irrational, in Q(√15), minimal poly 245x²−70x+2).
+- These live in different fields: hat in Q, spectre in Q(√15) = Q(λ_spe). This is a structural algebraic distinction, not merely a numerical one.
+- Bad primes for both systems: 2, 3, 5. BLS12-381 is a good prime.
 
 ---
 
