@@ -42,6 +42,15 @@ Empirical results from running experiments on the hat monotile and its algebraic
   - [Sparse Merkle Tree Commitment: Compact Key Has ~5-7 Hash Overhead, Enables Non-Membership Proofs (#37)](#sparse-merkle-tree-commitment-compact-key-has-5-7-hash-overhead-enables-non-membership-proofs-37)
   - [Semantic Geometric IOP: Spectre Adjacency Is Local, Hat Requires Cross-Supertile Openings (#39)](#semantic-geometric-iop-spectre-adjacency-is-local-hat-requires-cross-supertile-openings-39)
   - [Spectral Gap Ratio and Convergence Rates (#51)](#spectral-gap-ratio-and-convergence-rates-51)
+- [Cryptographic Construction Analyses](#cryptographic-construction-analyses)
+  - [Gap-Free Area Coverage Proofs: SMT + Hierarchical IOP (#41)](#gap-free-area-coverage-proofs-smt--hierarchical-iop-41)
+  - [Fuzzy Extractor from Hat Erasure Resilience (#42)](#fuzzy-extractor-from-hat-erasure-resilience-42)
+  - [Non-Malleable Code from Modification Distance Landscape (#43)](#non-malleable-code-from-modification-distance-landscape-43)
+  - [Formal Commitment Scheme: Statistical Hiding, Computational Binding (#44)](#formal-commitment-scheme-statistical-hiding-from-gap-computational-binding-from-merkle-44)
+  - [Threshold Secret Sharing from Spectre Depth-Collapse (#45) — FALSIFIED](#threshold-secret-sharing-from-spectre-depth-collapse-45)
+  - [Ring Signature from Sibling-Swap Equivalence Class (#46) — NEGATIVE](#ring-signature-from-sibling-swap-equivalence-class-46)
+  - [Functional and Attribute-Based Encryption from Ancestry Structure (#47)](#functional-and-attribute-based-encryption-from-ancestry-structure-47)
+  - [Designated-Verifier Proof from Local-to-Global Gap (#48) — FALSIFIED](#designated-verifier-proof-from-local-to-global-gap-48)
 - [Algebraic Number Theory (CAS Results)](#algebraic-number-theory-cas-results)
   - [Characteristic Polynomial, Minimal Polynomial, and Galois Group (#49)](#characteristic-polynomial-minimal-polynomial-and-galois-group-49)
   - [Pisot/Salem Classification of the Dominant Eigenvalues (#50)](#pisetsalem-classification-of-the-dominant-eigenvalues-50)
@@ -1500,6 +1509,369 @@ The spectre erasure plateau decay (#23: depth-2=87%, depth-3=42%, depth-4=7.5%) 
 - After 3 spectre substitution levels, tile frequencies are within 0.01% of limit.
 - Swap density convergence reaches 4-decimal accuracy by depth 3 (consistent with #36 observation).
 - Erasure plateau decay is independent of the spectral gap — a different phenomenon.
+
+---
+
+## Cryptographic Construction Analyses
+
+These sections analyze whether proposed cryptographic primitives built on the tiling hierarchy are feasible. Most are design-level analyses grounded in earlier experimental findings. "Positive" means the construction is sound in principle; "negative" means it is falsified by known findings.
+
+---
+
+### Gap-Free Area Coverage Proofs: SMT + Hierarchical IOP (#41)
+
+**Setup:** Design analysis based on #37 (sparse Merkle tree) and #28 (position-as-key).
+
+#### Construction
+
+A gap-free coverage proof composes two layers:
+1. **Hierarchical IOP** (current): proves algebraic fold consistency — all supertile compositions are valid
+2. **Coverage sampling** (new): after standard IOP rounds, verifier samples t random positions within a claimed bounding box; prover answers each with either a membership proof (tile at position, with hierarchy path) or a non-membership proof (empty leaf, with SMT sibling path)
+
+The SMT compact-key scheme (#37) enables non-membership proofs. Position-as-key (#28) ensures tile positions are commitments to their geometric coordinates. Together, they enable a verifier to challenge any position within the claimed region.
+
+#### Sample count for coverage confidence
+
+At depth d, spectre has ~(4+√15)^d ≈ 7.87^d base tiles covering a region. Tile density ρ = tiles/area. For target failure probability δ and region of n_tiles tiles:
+
+```
+t = ceil(log(1/δ) × (1 / (1 - n_tiles/region_cells)))
+```
+
+For typical parameters (δ=0.01, region = 1.1× tile count, n_tiles ≈ 500 at depth 3):
+- t ≈ 64 samples give δ ≈ e^{-64 × 0.1} ≈ 0.001 false-negative probability
+
+#### Proof size overhead
+
+| Component | Overhead |
+|-----------|---------|
+| Hierarchical IOP baseline | Q × depth × O(1) hashes/query |
+| Coverage sampling | t × O(log n) hashes/sample (SMT path) |
+| Position-as-key commitment | +7% of total proof size (established in #28) |
+
+For t=64, depth=4, n=3900 tiles: t × log₂(3900) ≈ 64 × 12 ≈ 768 extra hashes vs. baseline ~6000 hashes → ~13% overhead for coverage checking.
+
+#### Composition structure
+
+The coverage sampling phase is **additive** — it does not require structural changes to the IOP. The Fiat-Shamir structure is preserved: the coverage challenges are derived from the transcript of the IOP phase.
+
+#### What falsifies this
+
+- Coverage sampling becomes expensive if tile density is very low (large bounding box vs. tile count), requiring t → ∞
+- Non-membership proofs require SMT with compact coordinate keys (#37); dense Merkle trees cannot prove absence
+
+#### Conclusions
+
+- Gap-free coverage proofs are achievable by composing hierarchical IOP with SMT non-membership proofs
+- ~13% additional overhead for t=64 coverage samples at depth 4
+- Composition is additive (Fiat-Shamir compatible) with no structural IOP changes
+- Practical only when bounding box is ≤ 10% larger than tiled region (t grows rapidly with empty space fraction)
+
+---
+
+### Fuzzy Extractor from Hat Erasure Resilience (#42)
+
+**Setup:** Design analysis based on #17 (hat erasure resilience), #6 (gap), #16 (gap radius), #33 (canonical form).
+
+#### Construction
+
+The hat hierarchy functions as a **secure sketch** (one-half of a fuzzy extractor):
+
+- **Gen(tiling T):** Compute canonical Merkle root R. Output key K = H(R), helper string P = ∅ (no public helper needed).
+- **Rep(T'):** Given ≥55% surviving tiles of T, recover canonical hierarchy via deflation + recovery algorithm (#17). Recompute root R'. Output K' = H(R').
+
+By the canonical form theorem (#33), the recovery algorithm always produces the unique canonical labeling of the hierarchy. If the surviving tiles are sufficient for recovery, K' = K.
+
+#### Security analysis
+
+**Statistical hiding:** From #6/#16, a verifier with access only to tiles within radius r < depth d cannot distinguish two tilings with the same surviving fragment. The Merkle root (depth-d commitment) is information-theoretically hidden from local observations below radius d.
+
+**Computational binding:** Breaking K requires finding two different canonical tilings with the same root = Merkle hash collision.
+
+**Correctness threshold:** From #17, hat recovery succeeds for ≥55% tile survival (45% erasure threshold). Below this, Rep fails.
+
+#### Noise model
+
+The noise model (random i.i.d. tile erasure) matches the hat resilience profile exactly (#17). The system is not designed for adversarial tile selection (burst erasure), where resilience is lower.
+
+#### What this is NOT
+
+This is a **secure sketch**, not a complete fuzzy extractor. A standard fuzzy extractor requires:
+- (R, P) with R computationally hiding from P alone
+- Rep(w', P) → R from ANY w' within distance threshold
+
+The hat construction has **no public helper string P** — the tiling IS the witness. This is actually stronger: hiding holds unconditionally (no P to leak from). But it means the construction is specific to the case where the source w is the tiling itself, not an arbitrary string with a tiling-based encoding.
+
+#### Conclusions
+
+- Hat's erasure recovery IS a secure sketch: correct if ≥55% tiles survive; key is statistically hidden below radius = depth
+- The construction is unusual: the tiling is both the message and the noise-resilient encoding
+- Code rate is low (each tiling position encodes ~log₂(4) = 2 bits; a hat tile at depth d encodes ~2d bits total, but the committed key is only log₂(|hierarchy space|) bits)
+- NOT a general-purpose fuzzy extractor; specifically suited to geometric sources (physical tile patterns, sensor arrays, optical PUFs)
+
+---
+
+### Non-Malleable Code from Modification Distance Landscape (#43)
+
+**Setup:** Design analysis based on #26 (modification distance = 1), #35 (cost ≥ 2 for non-siblings), #33 (canonical form), #24 (tamper detection).
+
+#### The bimodal cost landscape
+
+The modification distance landscape for both hat and spectre is bimodal:
+- **Cost-0:** canonical sibling swaps — the labeling changes but the hierarchy structure is unchanged; canonical form reduces back to original
+- **Cost-1:** non-canonical sibling swaps detected and corrected by canonical form
+- **Cost-≥2:** all other modifications require changing at least 2 tiles and propagate upward
+
+There is a **combinatorial gap**: no modification exists at cost exactly between 1 and 2. (#35)
+
+#### Decoding behavior under tampering
+
+For the "codeword" = canonical hierarchy, "message" = canonical Merkle root:
+
+| Tamper type | Effect on decoded message |
+|-------------|--------------------------|
+| Cost-0 (sibling swap) | Canonical form CORRECTS → decoded message unchanged |
+| Cost-1 (canonical sibling swap) | Decoded message unchanged (canonical form is the correction) |
+| Cost-≥2 | Hierarchy becomes invalid → decode returns ⊥ OR produces a different valid hierarchy |
+
+Key insight: **cost-1 sibling swaps are corrected, not detected.** The canonical root is invariant under all valid swaps (#33). This means the scheme is a **correcting code** for cost-1, not a detecting code.
+
+For cost-≥2: whether the tampered codeword decodes to a related message depends on whether a valid canonical hierarchy exists near the tampered state. In general, removing or adding tiles to a supertile changes its type (e.g., converting a Spectre' to a Mystic' or producing an invalid supertile), so the decoded root is different. But the decoded message is NOT necessarily INDEPENDENT of the original.
+
+#### Why full non-malleability does not follow
+
+Standard non-malleability requires: for any efficient tamper function f with |f(C) - C| ≤ distance bound, the decoded f(C) is computationally INDEPENDENT of the decoded C. This is stronger than tamper detection.
+
+For hat:
+- A tamper function f that moves one F child from supertile A to supertile B (cost-2) changes BOTH parent types
+- The resulting decoded message (canonical root of the tampered hierarchy, if it decodes) is a deterministic function of the original + the modification location
+- An adversary who knows the cost-2 modification CAN predict the relationship between original and tampered message
+
+This is tamper DETECTION (decode → ⊥ for invalid hierarchies) but NOT full non-malleability.
+
+#### Spectre: stronger than hat
+
+For spectre, the modification distance is INFINITE for base-tile type changes (Spectre↔Mystic child count differs). Any cost-≥2 modification necessarily produces an invalid hierarchy (wrong child count for some parent type). Therefore, spectre's cost landscape gives a **detecting code**: any tamper above cost 1 is detected (decoded → ⊥).
+
+Hat has the P'↔F' swap as cost-1 (correctable) but other modifications as cost-≥2 (detectable if they produce invalid child counts, otherwise produce different messages).
+
+#### Conclusions
+
+- The bimodal cost landscape is a **detecting code** (cost ≥ 2 → detection), not a full non-malleable code
+- Cost-1 modifications (sibling swaps) are CORRECTED by canonical form, preserving the message
+- Cost-≥2 modifications that produce invalid hierarchies are detected (⊥); those that produce different valid hierarchies produce related but predictably different messages
+- Spectre's infinite modification distance for type changes makes it a stronger detecting code than hat
+
+---
+
+### Formal Commitment Scheme: Statistical Hiding from Gap, Computational Binding from Merkle (#44)
+
+**Setup:** Design analysis based on #6/#16 (gap), #33 (canonical form), #26/#35 (modification distance).
+
+#### The commitment scheme
+
+- **Commit(m, r):** Generate a hat/spectre hierarchy encoding message m with randomness r. Compute canonical form. Output commitment C = canonical Merkle root.
+- **Open(C, m, r):** Reveal the canonical hierarchy; verifier checks C = Merkle root.
+
+#### Statistical hiding (unconditional)
+
+From #6/#16: tiles within radius r < depth d reveal zero information about the root. Any verifier who can only query tiles within bounded radius cannot distinguish two tilings with different messages.
+
+The hiding guarantee is **unconditional** (no cryptographic assumption) and **information-theoretic** below query radius = depth. Above radius = depth, the tiling is recoverable and the root is determined.
+
+#### Computational binding
+
+Breaking binding requires finding two different canonical hierarchies with the same Merkle root. Since canonical form is unique (#33), this requires finding two different tilings that hash to the same root under the Merkle tree. This reduces to a hash collision, which is computationally hard under standard assumptions.
+
+The binding is **computational** (not statistical), which creates an unusual separation: unconditional hiding, computational binding. Standard commitments have one of: statistical hiding + computational binding (perfectly hiding), or computational hiding + statistical binding (perfectly binding). This scheme has a mixed guarantee.
+
+#### Trapdoor variant (equivocable)
+
+With the sibling-swap trapdoor (knowledge of which supertiles have valid swaps):
+- Any canonical commitment C can be opened to a "swapped" version C' = C (canonical form of the swap = original canonical form)
+- The swap key enables producing two "different" openings that both verify against C
+- This makes the scheme equivocable: trapdoor opens any commitment to any same-level swap variant
+
+Equivocability is bounded: the trapdoor only enables cost-0 modifications. Cost-≥2 modifications would require a second preimage.
+
+#### Conclusions
+
+- Commitment: unconditional statistical hiding below radius = depth; computational binding from Merkle
+- The mixed guarantee (unconditional hiding + computational binding) is unusual and may be exploitable in some security models where hiding must be computational
+- Trapdoor equivocability available via sibling-swap key; bounded to cost-0 modifications
+- Practical limitation: commits to a full tiling hierarchy, not an arbitrary string → message space is structured
+
+---
+
+### Threshold Secret Sharing from Spectre Depth-Collapse (#45)
+
+**Setup:** Based on results from #40 (spectre erasure threshold at depth 5–6).
+
+#### Hypothesis status: FALSIFIED
+
+The hypothesis was that at sufficient depth, the spectre erasure profile approaches a (k,n) threshold scheme — essentially nothing recoverable below ~90% tile survival.
+
+#40 measured depths 5–6 directly:
+
+| Erasure % | Depth 6 determined% |
+|-----------|-------------------|
+| 10% (90% survival) | **46.5%** |
+| 20% | 22.7% |
+| 30% | 10.0% |
+| 50% | 1.3% |
+| 90% | 0.2% |
+
+**A (k,n) threshold scheme would show ~100% recovery below threshold and ~0% above.** The spectre profile shows gradual continuous decay, not a sharp threshold.
+
+#### Why no threshold emerges
+
+The dependency graph structure stabilizes at depth 2 (#23): 22.4% of tiles are degree-0 (always independently determinable) and 77.6% depend on 7 siblings. This fixed structure produces a GRADUAL decay curve, not a phase transition.
+
+The decay rate per level converges to ~0.17× per depth, governed by sibling group-survival probability (1-q)^8, not a sharp combinatorial threshold.
+
+#### Conclusions
+
+- No (k,n) threshold scheme emerges at depth 5–6 (falsified)
+- Recovery degrades gradually; ~46.5% remains at 10% erasure even at depth 6
+- Asymptotic floor ~0.2% (not zero) from depth 6 onward
+- The depth-collapse of #23 is an asymptotic saturation of a gradual process, not a threshold
+- A spectre-based threshold secret sharing scheme would require a fundamentally different construction (e.g., Shamir over the Merkle root, with tiles as shares) — not inherent in the erasure structure
+
+---
+
+### Ring Signature from Sibling-Swap Equivalence Class (#46)
+
+**Setup:** Design analysis based on #33 (canonical form zero-cost), #29 (swap opportunity growth rate), #36 (swap density), #26 (modification distance = 1).
+
+#### The equivalence class
+
+At each supertile, there is exactly 1 valid sibling swap (P'↔F' for hat, Spectre'↔Mystic' for spectre). At depth d, there are ~λ^d independent swap opportunities across the hierarchy, each binary. This creates a swap-equivalence class of size ≤ 2^{λ^d} valid labelings — exponentially large in depth.
+
+#### Ring signature attempt
+
+For a ring signature, we want: ZK proof that the signer possesses one of the two valid labelings for a given supertile, without revealing which. The ring is {canonical labeling, one-swap labeling} per supertile.
+
+**Obstacle: canonical form is efficiently computable (#33).** Given any valid labeling, the canonical form check reduces it to the unique canonical labeling in zero extra hash cost. Any efficient verifier can compute the canonical form and determine which member of the equivalence class was used.
+
+This **breaks unlinkability**: the ring signature would reveal which labeling was used (canonical or swapped) by simply running the canonical form check on the revealed labeling.
+
+#### Group signature (positive result)
+
+With canonical form as the **opener** key, the construction DOES work as a **group signature**:
+- Regular signer: produces a proof of valid swap-class membership, without revealing canonical vs. non-canonical
+- Group manager (knows canonical form computation): can determine the canonical labeling of any message
+- Unlinkability holds against parties without the canonical form trapdoor
+
+This requires that the canonical form computation be a PRIVATE key (trapdoor). But #33 established that canonical form is computable from the public commitment — so it cannot serve as a private trapdoor unless the canonical form algorithm is itself secret.
+
+#### Deniable encryption attempt (negative)
+
+For deniable encryption, a user could claim "I encrypted m under labeling L, but actually it was L' (the swap variant) encoding a different message." This requires equivocable labeling: given ciphertext C, produce two openings to different messages.
+
+Since canonical form maps L → L_canonical deterministically and efficiently, equivocation would require L and L' to have the same canonical form. By definition of canonical form, both L and L' reduce to the SAME canonical labeling. Therefore, both openings would decode to the SAME message — equivocation fails.
+
+#### Conclusions
+
+- Direct ring signature/deniable encryption over swap-equivalence class is broken by efficient canonical form computation
+- A group signature construction with canonical form as private opener key is possible IF canonical form algorithm is not public — but #33 established it is public and zero-cost
+- The swap equivalence class is cryptographically weak as an anonymity ring: 2-member ring is too small, and member identity is publicly determinable
+- Negative result: the swap structure does not support standard ring/deniable primitives
+
+---
+
+### Functional and Attribute-Based Encryption from Ancestry Structure (#47)
+
+**Setup:** Design analysis based on #15 (MI saturation), #5 (deflation not one-way), #6 (gap), #33 (canonical form).
+
+#### The information structure
+
+From #15 (mutual information saturation):
+- Hat level-1 supertile types reveal +0.214 bits about the canonical root; higher levels reveal 0 additional bits
+- Spectre level-k types reveal 0 bits at ANY level k about the root (no information leakage above depth 1)
+
+This characterizes the exact leakage profile of a "level-k key" = the set of type labels at depth-k of the hierarchy.
+
+#### FE construction
+
+- **Master secret key (MSK):** the canonical hierarchy + Merkle root
+- **Level-k functional key (SK_k):** the type labels at depth-k (not positions, not adjacency)
+- **Encryption:** Enc(MSK, m) = canonical Merkle commitment to a tiling encoding m
+- **Decryption with SK_k:** Dec(SK_k, C) = check level-k types against C, output m if types match policy
+
+#### Information-theoretic analysis
+
+From #6/#16: tiles within radius < k of a query reveal zero information about the root. Level-k types alone (without adjacency or positions) provide even less information than a full depth-k query.
+
+**Key question:** Does holding level-k types (without positions) enable downward deflation (#5)?
+
+From #5: deflation requires the full tile adjacency structure to identify which supertile each tile belongs to. Level-k type labels alone (without positions) are insufficient — the verifier knows WHAT types exist at level k but not HOW they are arranged. The arrangement is needed for deflation.
+
+Therefore: level-k type labels do NOT enable downward deflation. The functional key reveals exactly the information characterized by #15 (+0.214 bits for hat level-1, 0 for spectre, 0 for hat levels ≥ 2).
+
+#### ABE extension
+
+An attribute-based encryption policy like "user holds a tiling with ≥ k Spectre' supertiles at level 2" can be evaluated by the IOP without revealing the full hierarchy:
+- The prover reveals level-2 type labels (O(n/8) types)
+- The verifier checks the count against the policy
+- The IOP guarantees these are the TRUE level-2 labels (not fabricated)
+- O(n × depth) proof size overhead for attribute checking
+
+#### Limitations
+
+- The FE/ABE scheme is specialized to tiling-structured messages (not arbitrary strings)
+- Efficiency: encryption/decryption require generating and verifying the full IOP proof
+- Security relies on IOP soundness (computational, not statistical), making this computationally secure only
+
+#### Conclusions
+
+- FE with level-k keys is sound in principle: level-k type labels reveal exactly the MI-characterized information (#15)
+- Level-k types alone do NOT enable downward deflation (#5) — the spatial arrangement is required
+- ABE with tiling count/type policies is achievable with O(n × depth) overhead via the IOP
+- Spectre is naturally "zero-leakage" FE: the level-k key reveals nothing about the full hierarchy
+- Practical application: physical-layer security where the "message" is a geometric tile pattern
+
+---
+
+### Designated-Verifier Proof from Local-to-Global Gap (#48)
+
+**Setup:** Design analysis based on #6/#16 (gap), #37 (SMT), #28 (position-as-key), #39 (semantic geometric IOP).
+
+#### Hypothesis status: FALSIFIED
+
+The hypothesis: depth d is a "private designation parameter" — only a verifier who knows d can close the gap by querying at radius ≥ d. The key question: is d recoverable from the commitment?
+
+**Answer: Yes, trivially.** The base tile count n ≈ λ^d where λ = 4+√15 ≈ 7.873 for spectre (or (7+3√5)/2 ≈ 6.854 for hat). Therefore:
+
+```
+d = round(log(n) / log(λ))
+```
+
+Any party who can count base tiles (which is revealed by the commitment size or the commitment structure) can compute d. The designation parameter is not secret — it is public information embedded in the tiling's scale.
+
+#### Why the gap cannot be a designation mechanism
+
+The local-to-global gap is an **unconditional** (information-theoretic) property: tiles below radius d are independent of the root FOR ALL OBSERVERS, not just those who don't know d. The gap applies equally to the designated verifier and to adversaries; knowing d tells you WHERE to query, not HOW to gain information that was previously hidden.
+
+A designated-verifier proof requires: evidence convincing to the designated verifier but deniable to others. The gap provides: zero information to everyone below threshold. These are incompatible: the gap is too strong (unconditional hiding → convinces nobody, not just others).
+
+#### What designation would actually require
+
+For a genuine designated-verifier scheme:
+1. The prover creates a "false evidence" that would convince an adversary: this requires a setup where the prover can generate accepting transcripts for FALSE statements
+2. The designated verifier can distinguish true from false transcripts: this requires secret information
+
+The tiling hierarchy has neither property: the prover cannot generate accepting IOP transcripts for invalid tilings (hash collisions required), and there is no secret the designated verifier holds that distinguishes valid from fake proofs beyond hash collision resistance.
+
+#### Possible salvage: encrypt d
+
+Depth d could be encrypted in the commitment, making it accessible only to designated verifiers. But this is equivalent to: Σ-protocol + symmetric encryption of the depth. It does not use any tiling-structural property for the designation — the designation comes from the encryption, not the gap.
+
+#### Conclusions
+
+- The local-to-global gap CANNOT serve as a designated-verifier mechanism: depth d is trivially recoverable from tile count (falsified)
+- The gap is too strong for designation: it hides information unconditionally, not selectively
+- A genuine designated-verifier scheme would need the prover to be able to equivocate (generate false transcripts), which the IOP does not support without trapdoor hash collisions
+- Possible construction: encrypt d separately and use standard DVZK techniques — but this is not a tiling-structural primitive
 
 ---
 
