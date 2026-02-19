@@ -96,9 +96,11 @@ pub fn complexity(word: &[u8], n: usize) -> usize {
     factors.len()
 }
 
-/// Generate the hat tiling Sturmian word with slope (5 - sqrt(5))/10 = 1/(1 + tau^2).
+/// Generate the hat tiling Sturmian word with slope (5 - sqrt(5))/10 = 1/(2 + phi).
 ///
-/// This slope corresponds to the H-metatile frequency in the hat tiling.
+/// This slope is the lower GAB root q- = (5-sqrt(5))/10, confirmed equal to the
+/// continued fraction [0; 3, 1, 1, 1, ...] = 1/(2+phi). It is NOT the PF metatile
+/// instance frequency f_H = 1/3; it is the Sturmian symbol density.
 /// The continued fraction is [0; 3, 1, 1, 1, ...] = [0; 3, phi^{-1}].
 pub fn hat_sturmian_word(n: usize) -> Vec<u8> {
     let alpha = (5.0 - 5.0_f64.sqrt()) / 10.0; // = 1/(1 + phi^2)

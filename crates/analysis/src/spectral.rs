@@ -157,17 +157,22 @@ pub fn exact_hat_eigenvector<F: Field>(phi: F) -> Vec<F> {
     vec![v_h, v_t, v_p, v_f]
 }
 
-/// Verify the GAB (Gähler-Akiyama-Baake) frequency equation for hat tilings.
+/// Verify the GAB (Gähler-Akiyama-Baake) equation for hat tilings.
 ///
-/// The tile frequency q for the H-type metatile satisfies:
+/// The Sturmian slope / symbol density q satisfies:
 ///   q^2 - q + 1/5 = 0
 ///
 /// with solutions q = (5 ± sqrt(5)) / 10.
 ///
-/// This connects the substitution matrix eigenvalues to a quadratic over Q,
-/// verifying that tile frequencies lie in Q(sqrt(5)).
+/// The two roots are:
+///   q- = (5 - sqrt(5))/10 ≈ 0.2764  — the Sturmian slope [0;3,1,1,1,...] = 1/(2+φ)
+///   q+ = (5 + sqrt(5))/10 ≈ 0.7236  — the complementary symbol density (= 1 - q-)
 ///
-/// Returns true if the equation holds for the given frequency value.
+/// Note: these are NOT the Perron-Frobenius metatile instance frequencies.
+/// The PF frequency of the H-type metatile is f_H = 1/3 ≈ 0.333, distinct from q+.
+/// The GAB roots measure Sturmian spatial density, not metatile instance ratios.
+///
+/// Returns true if the equation holds for the given value.
 pub fn verify_gab_equation<F: Field>(q: F) -> bool {
     let five = F::from(5u64);
     let five_inv = five.inverse().expect("5 is invertible");
@@ -194,9 +199,10 @@ pub fn hat_matrix_inverse<F: Field>() -> Matrix<F> {
     &(&m3 + &m2.scale(-seven)) + &id.scale(seven)
 }
 
-/// Compute the two GAB frequency roots (5 + sqrt(5))/10 and (5 - sqrt(5))/10.
+/// Compute the two GAB roots (5 + sqrt(5))/10 and (5 - sqrt(5))/10.
 ///
-/// These are the tile frequency values for the H metatile in Q(sqrt(5)).
+/// These are the Sturmian slope (q-) and its complement (q+) for the hat tiling,
+/// both in Q(sqrt(5)). See [`verify_gab_equation`] for the distinction from PF frequencies.
 pub fn gab_frequency_roots<F: Field>(sqrt5: F) -> (F, F) {
     let five = F::from(5u64);
     let ten_inv = F::from(10u64).inverse().expect("10 is invertible");

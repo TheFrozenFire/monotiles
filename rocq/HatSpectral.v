@@ -350,7 +350,17 @@ Proof. vm_compute. reflexivity. Qed.
 
     The Gähler-Akiyama-Baake equation for hat tilings:
       q^2 - q + 1/5 = 0
-    where q is the H-metatile frequency.
+    where q is the Sturmian slope / symbol density for the hat tiling.
+
+    The two roots are:
+      q- = (5 - sqrt(5)) / 10  -- the Sturmian slope, equal to the continued
+                                    fraction [0; 3, 1, 1, 1, ...] = 1/(2 + phi)
+      q+ = (5 + sqrt(5)) / 10  -- the complementary symbol density (= 1 - q-)
+
+    Note: these are NOT the Perron-Frobenius metatile instance frequencies.
+    The PF frequency of the H-type metatile is f_H = 1/3 ≈ 0.333, which is
+    distinct from q+ ≈ 0.724.  The GAB roots measure spatial / symbolic
+    density in the associated Sturmian word, not the metatile instance ratio.
 
     Over Z, we verify the equivalent: 5*q^2 - 5*q + 1 = 0.
     The roots are q = (5 +/- sqrt(5)) / 10.
