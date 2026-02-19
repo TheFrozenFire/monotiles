@@ -44,6 +44,7 @@ Empirical results from running experiments on the hat monotile and its algebraic
   - [Characteristic Polynomial, Minimal Polynomial, and Galois Group (#49)](#characteristic-polynomial-minimal-polynomial-and-galois-group-49)
   - [Pisot/Salem Classification of the Dominant Eigenvalues (#50)](#pisetsalem-classification-of-the-dominant-eigenvalues-50)
   - [Number Field Invariants of Q(λ_hat) and Q(λ_spe) (#52)](#number-field-invariants-of-λhat-and-λspe-52)
+  - [Coordinate Ring of Tile Positions (#53)](#coordinate-ring-of-tile-positions-53)
   - [Exact Tile Frequencies and Swap Density Closed Forms (#54)](#exact-tile-frequencies-and-swap-density-closed-forms-54)
   - [Smith Normal Form of the Substitution Matrices (#55)](#smith-normal-form-of-the-substitution-matrices-55)
   - [Topological Entropy, Mahler Measure, and Substitution Zeta Function (#56)](#topological-entropy-mahler-measure-and-substitution-zeta-function-56)
@@ -1490,6 +1491,100 @@ The compositum has class number 1 despite containing Q(√15) (class number 2): 
 - λ_hat = φ⁴ is the 4th power of the golden ratio — a remarkable exact identity connecting the hat substitution to the Fibonacci sequence.
 - λ_spe is itself the fundamental unit of Q(√15). The two Perron roots play structurally different roles: one is a power of a more fundamental number, the other is the most fundamental unit in its field.
 - Q(√15) having class number 2 (non-PID) may affect the algebraic structure of the commitment scheme and IOP constructions based on spectre — unique factorization cannot be assumed in the ring of integers.
+
+---
+
+### Coordinate Ring of Tile Positions (#53)
+
+**Setup:** `cas/53_coordinate_ring.gp`
+
+#### Tile translation lattice
+
+Every hat/spectre tile position `(tx, ty)` lives in the hexagonal lattice Z² with basis `e₁=(1,0)`, `e₂=(1/2, √3/2)` in Cartesian coordinates. This lattice is algebraically Z[ω], the **Eisenstein integers**, where ω = e^(iπ/3) = 1/2 + i√3/2 is a primitive 6th root of unity.
+
+ω satisfies the **6th cyclotomic polynomial** Φ₆(x) = x²−x+1 (discriminant −3), so:
+
+```
+Z[ω] = Z[x]/(x²−x+1) = ring of integers of Q(√(−3))
+```
+
+This is one of the only two imaginary quadratic PIDs with a unit group of order 6 (the other is the Gaussian integers Z[i], which have 4 units).
+
+#### Norm form
+
+The norm of a lattice point a+bω is:
+
+```
+N(a+bω) = a² + ab + b²
+```
+
+This equals the squared hexagonal distance from the origin to (a,b). It is **multiplicative**: N(z·w) = N(z)·N(w), making Z[ω] → Z≥0 a ring homomorphism.
+
+| (tx, ty) | N = a²+ab+b² | hex distance |
+|----------|-------------|-------------|
+| (0, 0) | 0 | 0 |
+| (1, 0) | 1 | 1 |
+| (0, 1) | 1 | 1 |
+| (1, 1) | 3 | √3 |
+| (2, 1) | 7 | √7 |
+| (3, −1) | 7 | √7 |
+
+Note: N=1 iff z is a unit. The 6 units of Z[ω] are ±1, ±ω, ±(1−ω), reflecting the hexagonal symmetry of the lattice.
+
+#### Full tile group
+
+The complete tile position group is:
+
+```
+Γ = Z[ω] ⋊ D₆ = Z² ⋊ D₆
+```
+
+where D₆ acts on Z[ω] by: rotation by k·(π/3) sends z ↦ ωᵏ·z, and reflection sends z ↦ z̄ (complex conjugate). The `CoxeterElement` struct in `crates/domain/src/coxeter.rs` implements this group in normal form `(tx: i64, ty: i64, rotation: u8, reflected: bool)`.
+
+#### Exact positions and the inflation ring
+
+The `psi` functor in `crates/tiling/src/geometry.rs` maps floating-point positions to integer hexagonal coordinates by rounding: `ty = round(y·2/√3)`, `tx = round(x − ty/2)`. Before rounding, exact child positions at level n live in:
+
+```
+Z[φ^{2n}, ω] ⊂ Q(√5, √(−3))
+```
+
+The compositum Q(√5, √(−3)) has degree 4 over Q, with:
+
+| Field property | Value |
+|----------------|-------|
+| Degree | 4 |
+| Discriminant | 225 |
+| Class number | **1** (PID) |
+| Signature | [0, 2] (totally complex) |
+| Primitive element min. poly | x⁴ − 4x² + 64 |
+
+After rounding (psi functor), positions return to Z[ω] with error ≤ 1/2 hexagonal unit.
+
+#### Spectre subring
+
+Spectre tiles have no reflected tiles (finding #30). Spectre positions live in:
+
+```
+Γ⁺ = Z[ω] ⋊ Z/6Z ⊂ Γ   (index-2 orientation-preserving subgroup)
+```
+
+This is a **group-theoretic** restriction, not an algebraic ring restriction. The coordinate ring is the same Z[ω] for both hat and spectre.
+
+#### Splitting primes
+
+Primes that split completely in Z[ω] (good primes for arithmetic in the lattice) are exactly those with p ≡ 1 mod 3: 7, 13, 19, 31, 37, 43, 61, 67, 73, 79, 97, ...
+
+Primes p ≡ 2 mod 3 remain inert (prime in Z[ω]); p=3 ramifies (3 = −ω²(1−ω)² up to unit).
+
+#### Conclusions
+
+- Tile translation coordinates are **Eisenstein integers Z[ω]** — ring of integers of Q(√(−3)), class number 1, Euclidean algorithm exists.
+- Norm form N(a+bω) = a²+ab+b² computes squared hex distance; it is multiplicative.
+- Full tile group Γ = Z[ω] ⋊ D₆; spectre uses index-2 subgroup Γ⁺ (same ring, no reflections).
+- Exact inflation positions at level n live in the degree-4 PID Q(√5, √(−3)) (disc = 225, class number 1); rounded back to Z[ω] by the psi functor.
+- **SVP over Z[ω] is trivially easy**: the shortest vector has norm 1 (the 6 units). Standard lattice hardness (LWE/SIS) does **not** apply — Z[ω] is too structured for hardness.
+- BLS12-381 and other primes ≡ 1 mod 3 are "good" for arithmetic in Z[ω]; primes 2, 3 ramify.
 
 ---
 
