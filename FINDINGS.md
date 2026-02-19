@@ -39,6 +39,7 @@ Empirical results from running experiments on the hat monotile and its algebraic
   - [Geometric Tile Placement: Position-as-Key Adds Only ~7% Proof Size Overhead (#28)](#geometric-tile-placement-position-as-key-adds-only-7-proof-size-overhead-28)
   - [IOP Canonical Form Defense: Zero-Cost Enforcement (#33)](#iop-canonical-form-defense-zero-cost-enforcement-33)
   - [Sparse Merkle Tree Commitment: Compact Key Has ~5-7 Hash Overhead, Enables Non-Membership Proofs (#37)](#sparse-merkle-tree-commitment-compact-key-has-5-7-hash-overhead-enables-non-membership-proofs-37)
+  - [Spectral Gap Ratio and Convergence Rates (#51)](#spectral-gap-ratio-and-convergence-rates-51)
 - [Algebraic Number Theory (CAS Results)](#algebraic-number-theory-cas-results)
   - [Characteristic Polynomial, Minimal Polynomial, and Galois Group (#49)](#characteristic-polynomial-minimal-polynomial-and-galois-group-49)
   - [Pisot/Salem Classification of the Dominant Eigenvalues (#50)](#pisetsalem-classification-of-the-dominant-eigenvalues-50)
@@ -1279,6 +1280,82 @@ These guarantees are impossible with a dense Merkle tree over a tile index list.
 - The overhead is small (~5–7 hashes) and approximately constant across depths — both path lengths grow linearly at nearly the same rate.
 - The Coxeter (132-bit) or SHA-256 (256-bit) fixed-width keys have crossover depths of 44+ and 86+ respectively, both impractical for this problem.
 - The practical question (#37) is not proof size: it is whether non-membership proofs are needed. If gap-free coverage checking is a requirement, compact-key SMT is the right data structure with modest proof overhead.
+
+---
+
+### Spectral Gap Ratio and Convergence Rates (#51)
+
+**Setup:** `cas/51_spectral_gap.gp`
+
+#### All eigenvalues (exact)
+
+| System | λ₁ (Perron) | λ₂ | λ₃ | λ₄ |
+|--------|------------|----|----|-----|
+| Hat | (7+3√5)/2 ≈ 6.854 | **1** (exact) | **−1** (exact) | (7−3√5)/2 ≈ 0.146 |
+| Spectre | 4+√15 ≈ 7.873 | 4−√15 ≈ 0.127 | — | — |
+
+#### Spectral gap ratios
+
+**Hat:** The second-largest eigenvalue magnitude is **|λ₂| = |λ₃| = 1** — both ±1 lie on the unit circle. The formal ratio |λ₂|/λ₁ = 1/λ₁ = (7−3√5)/2 ≈ 0.146, but this masks a deeper issue: M^k never converges geometrically to a rank-1 Perron matrix because the unit-circle eigenvalues produce a PERSISTENT non-decaying component. The normalized tile frequency distribution (M^k·v / ‖M^k·v‖) does converge geometrically (at rate 1/λ₁ per step) since the dominant term grows as λ₁^k.
+
+**Spectre:** Both eigenvalues are real with λ₁·λ₂ = det(M_spe) = 1, so λ₂ = 1/λ₁. The convergence rate is:
+
+```
+|λ₂|/λ₁ = 1/λ₁² = 1/(4+√15)² = 1/(31+8√15) ≈ 0.01613
+Spectral gap g = 1 − 1/(31+8√15) = (30+8√15)/(31+8√15) ≈ 0.9839
+```
+
+This is exact and in Q(√15) (same field as λ₁ and the swap density f\*).
+
+#### Convergence rates
+
+**Spectre tile frequency convergence:**
+
+| Levels k | Remaining error |(|λ₂|/λ₁)^k|
+|---------|----------------|
+| 1 | 1.61% |
+| 2 | 0.026% |
+| 3 | 0.00042% |
+
+After **3 substitution levels**, spectre tile frequencies are within 0.01% of their Perron limit. This explains why the empirical swap density in #36 had fully converged at depth 3.
+
+**S'/M' ratio convergence (from single Spectre seed):**
+
+Starting from one Spectre tile, the S:M ratio of the inflation hierarchy converges to the right-eigenvector ratio r_S/r_M = 1/(√15−3) = (√15+3)/6 ≈ 1.145:
+
+| Depth | S/M ratio | Error from limit |
+|-------|-----------|-----------------|
+| 1 | 1.1667 | 0.0212 |
+| 2 | 1.1458 | 0.000285 |
+| 3 | 1.14550 | 4.6×10⁻⁶ |
+| 4 | 1.145497 | 7.4×10⁻⁸ |
+
+Geometric convergence at rate (4−√15)² ≈ 0.016 per level, exactly as predicted.
+
+#### Hat: unit eigenvalues and MI saturation
+
+Hat has eigenvalues ±1 (from char poly factor (x−1)(x+1)). The corresponding integer eigenvectors (verified):
+- λ=+1: [1, 1, 0, −1] — M·[1,1,0,-1] = [1,1,0,-1] ✓
+- λ=−1: [−3, 3, 2, 1] — M·[-3,3,2,1] = -[−3,3,2,1] ✓
+
+The projection of M·e_H (level-1 distribution from single H) onto the λ=1 eigenvector is **2/3 ≠ 0**, meaning the ±1 components persist at level 1. The MI saturation "after level 1" (finding #15) is therefore NOT explained by orthogonality eliminating unit-eigenvalue components. The correct explanation is that mutual information depends on CONDITIONAL probabilities (given a level-k supertile type), not the marginal tile frequencies — a different quantity from the eigenvector distribution.
+
+#### Erasure plateau vs. spectral gap
+
+The spectre erasure plateau decay (#23: depth-2=87%, depth-3=42%, depth-4=7.5%) is **not** the spectral gap convergence. The depth-to-depth ratios are ~0.48 and ~0.18, not the spectral gap 0.016. These are independent phenomena:
+
+| Quantity | Rate | Governed by |
+|----------|------|------------|
+| Tile frequency stabilization | (4−√15)² ≈ 0.016/level | Spectral gap |
+| Erasure plateau decay | ~0.2–0.5 per depth | Hierarchy structure |
+
+#### Conclusions
+
+- Hat has unit-circle eigenvalues (±1); normalized frequency distribution converges geometrically at rate 1/λ₁ ≈ 0.146/level (not zero, but bounded).
+- Spectre has purely geometric convergence at rate **1/(31+8√15) ≈ 0.016/level**; exact in Q(√15).
+- After 3 spectre substitution levels, tile frequencies are within 0.01% of limit.
+- Swap density convergence reaches 4-decimal accuracy by depth 3 (consistent with #36 observation).
+- Erasure plateau decay is independent of the spectral gap — a different phenomenon.
 
 ---
 
