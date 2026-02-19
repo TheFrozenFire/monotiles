@@ -46,6 +46,7 @@ Empirical results from running experiments on the hat monotile and its algebraic
   - [Exact Tile Frequencies and Swap Density Closed Forms (#54)](#exact-tile-frequencies-and-swap-density-closed-forms-54)
   - [Smith Normal Form of the Substitution Matrices (#55)](#smith-normal-form-of-the-substitution-matrices-55)
   - [Topological Entropy, Mahler Measure, and Substitution Zeta Function (#56)](#topological-entropy-mahler-measure-and-substitution-zeta-function-56)
+  - [GAB Equation, Sturmian Slope, and Hat-Polykite Density (#57)](#gab-equation-sturmian-slope-and-hat-polykite-density-57)
 
 ---
 
@@ -1557,3 +1558,99 @@ The hat sequence 7, 49, 322, 2209, ... grows at rate λ_hat ≈ 6.854. The ratio
 - The spectre topological entropy equals the arithmetic regulator of Q(√15): h_spe = log(4+√15) = reg(Q(√15)).
 - The Mahler measures are the Perron roots (not 1 — these are "interesting" polynomials in the sense of Lehmer's problem).
 - The substitution zeta functions are rational with the exact pole structure determined by the characteristic polynomial factorization.
+
+---
+
+### GAB Equation, Sturmian Slope, and Hat-Polykite Density (#57)
+
+**Setup:** `cas/57_gab_hat_density.gp`
+
+These quantities appear in the ROCQ proofs (`HatSpectral.v`, `Substitution.v`) but were not previously computed by CAS.
+
+#### GAB frequency equation
+
+The GAB equation arises in spectral analysis of hat substitution. In integer form: **5q² − 5q + 1 = 0**.
+
+Roots in Q(√5):
+
+| Root | Exact form | Numerical |
+|------|-----------|-----------|
+| q₊ | (5+√5)/10 | ≈ 0.72361 |
+| q₋ | (5−√5)/10 | ≈ 0.27639 |
+
+Verification: 5q₊² − 5q₊ + 1 = 0 ✓ (to 38 decimal places). Discriminant = 5 (consistent with Q(√5) membership).
+
+Algebraic properties:
+- Both q± ∈ Q(√5) (= 1/2 ± √5/10)
+- Neither is an algebraic integer (minimal poly has leading coeff 5)
+- 10·q± = 5±√5 = 4±2φ **are** algebraic integers in Z[φ], with norm N(5+√5) = 20 = 2²·5
+
+#### Sturmian slope identification
+
+The hat tiling has continued fraction expansion [0; 3, 1, 1, 1, ...]. CAS computes this slope exactly:
+
+```
+slope = 1 / (3 + (φ−1)) = 1 / (2 + φ) = (5−√5)/10 = q₋
+```
+
+**q₋ = (5−√5)/10 IS the hat Sturmian slope** (verified numerically; match confirmed to 38 digits).
+
+#### ROCQ comment clarification
+
+`HatSpectral.v` calls q₊ the "H-metatile frequency." This is imprecise — q₊ and the PF eigenvector frequency f_H are different quantities in different models:
+
+| Quantity | Value | Meaning |
+|----------|-------|---------|
+| PF frequency f_H | 1/3 ≈ 0.333 | Fraction of metatile *instances* that are H-type |
+| q₊ = (5+√5)/10 | ≈ 0.724 | Sturmian symbol density (fraction of *area* or *space*) |
+
+These are not equal. The PF eigenvector measures instance frequency; q₊ measures the spatial/symbolic density of H-symbols in the associated Sturmian word with slope q₋.
+
+#### Hat-polykite density vector
+
+From `Substitution.v`: h = [4, 1, 2, 2] is the number of hat polykite tiles in each metatile type (H: 4, T: 1, P: 2, F: 2).
+
+**ROCQ claim M·h = [25, 4, 14, 16] verified:**
+
+```
+M_hat · [4, 1, 2, 2]ᵀ = [25, 4, 14, 16]ᵀ  ✓
+```
+
+(Exact integer arithmetic confirms the ROCQ proof.)
+
+#### Right PF eigenvector (exact, in Q(√5))
+
+For eigenvalue λ = (7+3√5)/2, setting r_H = 1 and solving M·r = λ·r:
+
+| Component | Exact form | Numerical |
+|-----------|-----------|-----------|
+| r_H | 1 | 1.0 |
+| r_T | (7−3√5)/2 | ≈ 0.14590 |
+| r_P | (3√5−5)/3 | ≈ 0.56940 |
+| r_F | 2/3 | ≈ 0.66667 |
+
+Derivation: r_F = 2/3 follows from the substitution λ²−7λ+1 = 0, which gives λ²−4λ+1 = 3λ, collapsing a 4×4 system to an exact rational solution over Q(√5).
+
+#### Asymptotic hat-polykite count per metatile
+
+Average number of hat polykite tiles per metatile as level n → ∞:
+
+```
+h · r / (1 · r) = (11+√5)/2 / (7−√5)/2
+               = (11+√5) / (7−√5)
+               = (41+9√5) / 22
+               ≈ 2.7784
+```
+
+This is > 1 (expected: each metatile consists of multiple polykites). The exact form **(41+9√5)/22 ∈ Q(√5)** is confirmed.
+
+Rationalization: (11+√5)(7+√5) / ((7−√5)(7+√5)) = (82+18√5)/44 = (41+9√5)/22.
+
+#### Conclusions
+
+- q₋ = (5−√5)/10 is the hat tiling Sturmian slope (exactly the CF value [0;3,1,1,1,...]). Proved by CAS.
+- q₊ = (5+√5)/10 is the complementary symbol density (= 1 − q₋), not the PF metatile frequency.
+- The ROCQ `HatSpectral.v` label "H-metatile frequency" for q₊ is a misnomer: it should read "Sturmian complementary density."
+- M·h = [25,4,14,16] verified exactly (no rounding).
+- Right PF eigenvector has exact form (1, (7−3√5)/2, (3√5−5)/3, 2/3) in Q(√5).
+- Asymptotic hat-polykite tiles per metatile = **(41+9√5)/22 ≈ 2.778** (exact, in Q(√5)).
